@@ -1796,8 +1796,8 @@ Returns MD5 from entry."
        .description .location .e-type .uid .level))))
 
 (defun org-caldav-insert-org-entry (start-d start-t end-d end-t
-                                            summary description location e-type
-                                            &optional uid level)
+											summary description location e-type freq
+											&optional uid level)
   "Insert org block from given data at current position.
 START/END-D: Start/End date.  START/END-T: Start/End time.
 SUMMARY, DESCRIPTION, LOCATION, UID: obvious.
@@ -1831,6 +1831,7 @@ PRIORITY: 0-9, PERCENT-COMPLETE: 0-100.
 See `org-caldav-todo-priority' and
 `org-caldav-todo-percent-states' for explanations how this values
 are used.
+FREQ: Start org datetime with recursive option.
 SUMMARY, DESCRIPTION, UID: obvious.
 Dates must be given in a format `org-read-date' can parse.
 
@@ -1917,7 +1918,7 @@ Sets the block's tags, and return its MD5."
         (org-set-tags (reverse cleantags)))
       (org-set-tags-to nil))))
 
-(defun org-caldav-create-time-range (start-d start-t end-d end-t e-type)
+(defun org-caldav-create-time-range (start-d start-t end-d end-t e-type freq)
   "Creeate an Org timestamp range from START-D/T, END-D/T."
   (with-temp-buffer
     (cond
@@ -1934,6 +1935,8 @@ Sets the block's tags, and return its MD5."
 	;; Same day, different time.
 	(backward-char 1)
 	(insert "-" end-t)))
+	(when freq
+	  (insert " " freq))
     (buffer-string)))
 
 (defun org-caldav-insert-org-time-stamp (date &optional time)
@@ -2197,6 +2200,13 @@ which can be fed into `org-caldav-insert-org-event-or-todo'."
 		       (plist-get dtend-plist 'zone)))
 	 e-type
 	 (rrule (icalendar--get-event-property e 'RRULE))
+	 (freq (when (and rrule (string-match ".*FREQ=\\(.*\\);" rrule))
+		 (concat "+" (save-match-data
+			       (if (string-match ".*INTERVAL=\\(.*\\);.*" rrule)
+				   (match-string 1 rrule) "1"))
+			 (save-match-data
+			   (and (string-match ".*FREQ=\\(.*\\);.*" rrule)
+				(downcase (substring (match-string 1 rrule) 0 1)))))))
 	 (rdate (icalendar--get-event-property e 'RDATE))
 	 (duration (icalendar--get-event-property e 'DURATION)))
     (when (string-match "^\\(?:\\(DL\\|S\\):\s+\\)?\\(.*\\)$" summary)
