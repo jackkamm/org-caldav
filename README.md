@@ -398,6 +398,23 @@ the events into the debug buffer. If you send such a buffer in a bug
 report, please make very sure you have removed personal information
 from those events.
 
+#### Syncing TODO
+
+This section is experimental.  So please make sure you have backups before you
+use this.
+
+To enable this, use
+
+```
+(setq
+ ;; using t instead of 'all should also work
+ org-icalendar-include-todo 'all
+ org-caldav-sync-todo t)
+```
+
+The first will include your todos to the exporter (org->cal) the second controls
+the use of downloaded vtodo events to import it to the `org-caldav-inbox`.
+
 #### Known Bugs
 
 * Recurring events created or changed on the calendar side cannot be
