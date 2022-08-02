@@ -238,11 +238,6 @@ synced and which not:
   `org-caldav-skip-conditions`. The syntax of the conditions is
   described in the doc-string of `org-agenda-skip-if`.
 
-* In case you just want to keep your remote calendar clean, set
-  `org-caldav-days-in-past` to the number of days you want to keep in
-  the past on the remote calendar.  This does not affect your org files,
-  it works just as a filter for entries older than N days.
-
 Note however that the normal `org-agenda-skip-function(-global)` will
 **not** have any effect on the icalendar exporter (this used to be the
 case, but changed with the new exporters).
@@ -406,34 +401,19 @@ from those events.
 #### Syncing TODO
 
 This section is experimental.  So please make sure you have backups before you
-use this.  Create issues if it doesn't work for you.  This was developed with a
-nextcloud 12 server, and it is not sure if it works somewhere else.  Please
-report if you have another setup, so we can fix that.
+use this.
 
-To enable this, just use
+To enable this, use
 
-    (setq org-icalendar-include-todo 'all
-        org-caldav-sync-todo t)
+```
+(setq
+ ;; using t instead of 'all should also work
+ org-icalendar-include-todo 'all
+ org-caldav-sync-todo t)
+```
 
 The first will include your todos to the exporter (org->cal) the second controls
-the use of downloaded vtodo events to import it to the `inbox`.
-
-It is also a good idea to set
-
-    (setq org-icalendar-categories '(local-tags))
-
-so the tags on the nextcloud will not include the local category.  If you need
-that, leave a message.  On cal->org this would add it to the tags.
-
-See the variables `org-caldav-todo-priority` and
-`org-caldav-todo-percent-states` for some customization.
-
-There is also `org-caldav-todo-deadline-schedule-warning-days` which can be set
-to `t` if you want to include a scheduled date.  Some apps like OpenTasks will
-move tasks out of the widget if there is a scheduled, until it actually starts.
-
-I would recommend you to test this and report issues, because I also want to
-have a stable todo handling.
+the use of downloaded vtodo events to import it to the `org-caldav-inbox`.
 
 #### Known Bugs
 
@@ -446,11 +426,6 @@ have a stable todo handling.
 
 * Pretty much everything besides SUMMARY, DESCRIPTION, LOCATION and
   time is ignored in iCalendar.
-
-* When trying to sync todo entries org-mode's export to ical can create empty
-  entries.  org-caldav tries to sync this, which results in errors.
-  In this case you can set `org-icalender-sync-todo` to `t` instead of `'all`,
-  until it is fixed.
 
 #### How syncing happens (a.k.a. my little CalDAV rant)
 
