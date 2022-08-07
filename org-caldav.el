@@ -1243,6 +1243,7 @@ which can only be synced to calendar. Ignoring." uid))
 		      'error:changed-orgsexp 'cal->org))
 	    org-caldav-sync-result))))
 
+;; TODO: Merge with org-caldav-update-org-event
 (defun org-caldav-update-org-todo ()
   "Updates the todo entry.
 This will update:  heading, priority, todo-state, scheduled, deadline.
@@ -1524,6 +1525,8 @@ Returns MD5 from entry."
 	(org-entry-beginning-position)
 	(org-entry-end-position))))
 
+;; TODO merge with org-caldav-insert-org-entry?
+
 ;; copy from org-caldav-insert-org-entry, and adjusted to vtodo
 (defun org-caldav-insert-org-todo (start-d start-t due-d due-t
                                     priority status summary description
@@ -1763,100 +1766,33 @@ If COMPLEMENT is non-nil, return all item without errors."
 	  (setq heading (match-string 1)))))
     heading))
 
-;; The following is taken from icalendar.el, written by Ulf Jasper.
-;; The LOCATION property is added the extracted list
-(defun org-caldav-convert-event ()
-  "Convert icalendar event in current buffer.
-Returns a list '(start-d start-t end-d end-t summary description location)'
-which can be fed into `org-caldav-insert-org-entry'."
-  (let ((decoded (decode-coding-region (point-min) (point-max) 'utf-8 t)))
-    (erase-buffer)
-    (set-buffer-multibyte t)
-    (setq buffer-file-coding-system 'utf-8)
-    (insert decoded))
-  (goto-char (point-min))
-  (let* ((calendar-date-style 'european)
-	 (ical-list (icalendar--read-element nil nil))
-	 (e (car (icalendar--all-events ical-list)))
-	 (zone-map (icalendar--convert-all-timezones ical-list))
-	 (dtstart (icalendar--get-event-property e 'DTSTART))
-	 (dtstart-zone (icalendar--find-time-zone
-			(icalendar--get-event-property-attributes
-			 e 'DTSTART)
-			zone-map))
-	 (dtstart-dec (icalendar--decode-isodatetime dtstart nil
-						     dtstart-zone))
-	 (start-d (icalendar--datetime-to-diary-date
-		   dtstart-dec))
-	 (start-t (if dtstart-dec (icalendar--datetime-to-colontime dtstart-dec) nil))
-	 (dtend (icalendar--get-event-property e 'DTEND))
-	 (dtend-zone (icalendar--find-time-zone
-		      (icalendar--get-event-property-attributes
-		       e 'DTEND)
-		      zone-map))
-	 (dtend-dec (icalendar--decode-isodatetime dtend
-						   nil dtend-zone))
-	 (dtend-1-dec (icalendar--decode-isodatetime dtend -1
-						     dtend-zone))
-	 end-d
-	 end-1-d
-	 end-t
-	 (summary (icalendar--convert-string-for-import
-		   (or (icalendar--get-event-property e 'SUMMARY)
-		       "No Title")))
-     e-type
-	 (description (icalendar--convert-string-for-import
-		       (or (icalendar--get-event-property e 'DESCRIPTION)
-			   "")))
-	 (location (icalendar--convert-string-for-import
-                    (or (icalendar--get-event-property e 'LOCATION)
-                        "")))
-	 (rrule (icalendar--get-event-property e 'RRULE))
-	 (rdate (icalendar--get-event-property e 'RDATE))
-	 (duration (icalendar--get-event-property e 'DURATION)))
-    (if (string-match "^\\(?:\\(DL\\|S\\):\s+\\)?\\(.*\\)$" summary)
-        (progn
-          (setq e-type (match-string 1 summary))
-          (setq summary (match-string 2 summary))))
-    ;; check whether start-time is missing
-    (if	(and dtstart
-	     (string=
-	      (cadr (icalendar--get-event-property-attributes
-		     e 'DTSTART))
-	      "DATE"))
-	(setq start-t nil))
-    (when duration
-      (let ((dtend-dec-d (icalendar--add-decoded-times
-			  dtstart-dec
-			  (icalendar--decode-isoduration duration)))
-	    (dtend-1-dec-d (icalendar--add-decoded-times
-			    dtstart-dec
-			    (icalendar--decode-isoduration duration
-							   t))))
-	(if (and dtend-dec (not (eq dtend-dec dtend-dec-d)))
-	    (message "Inconsistent endtime and duration for %s"
-		     summary))
-	(setq dtend-dec dtend-dec-d)
-	(setq dtend-1-dec dtend-1-dec-d)))
-    (setq end-d (if dtend-dec
-		    (icalendar--datetime-to-diary-date dtend-dec)
-		  start-d))
-    (setq end-1-d (if dtend-1-dec
-		      (icalendar--datetime-to-diary-date dtend-1-dec)
-		    start-d))
-    (setq end-t (if (and
-		     dtend-dec
-		     (not (string=
-			   (cadr
-			    (icalendar--get-event-property-attributes
-			     e 'DTEND))
-			   "DATE")))
-		    (icalendar--datetime-to-colontime dtend-dec)
-		  start-t))
-    ;; Return result
-    (list start-d start-t
-	  (if end-t end-d end-1-d)
-	  end-t summary description location e-type)))
+(defun org-caldav--datetime-to-colontime (datetime e property &optional default)
+  "Extract time part of decoded datetime.
+If PROPERTY in event E contains has valuetype 'date' instead of
+'date-time', return DEFAULT instead."
+  (if (and datetime
+             (not (string= 
+                   (cadr (icalendar--get-event-property-attributes
+                          e property))
+                   "DATE")))
+      (icalendar--datetime-to-colontime datetime)
+    default))
+
+(defun org-caldav--event-date-plist (e property zone-map)
+  "Helper function for `org-caldav-convert-event-or-todo'.
+Extracts datetime-related attributes from PROPERTY of event E and
+puts them in a plist."
+  (let* ((dt-prop (icalendar--get-event-property e property))
+	 (dt-zone (icalendar--find-time-zone
+		   (icalendar--get-event-property-attributes
+		    e property)
+		   zone-map))
+	 (dt-dec (icalendar--decode-isodatetime dt-prop nil dt-zone)))
+    (list :date-properties dt-prop
+          :date-zone dt-zone
+          :date-decoded dt-dec
+          :date-diary (icalendar--datetime-to-diary-date dt-dec)
+          :date-colontime (org-caldav--datetime-to-colontime dt-dec e property))))
 
 (defun org-caldav--icalendar--all-todos (icalendar)
   "Return the list of all existing todos in the given ICALENDAR."
@@ -1867,13 +1803,11 @@ which can be fed into `org-caldav-insert-org-entry'."
       (nreverse icalendar))
     result))
 
-
-;; I simple copied that from org-caldav-convert-event and made adjustments
-(defun org-caldav-convert-todo ()
-  "Convert icalendar todo in current buffer.
-Returns a list '(start-d start-t due-d due-t priority summary description
-completed-d completed-t)'
-which can be fed into `org-caldav-insert-org-todo'."
+;; TODO: Replace org-caldav-convert-event/todo with direct calls to
+;; this function. Also, return a plist (need to also the change
+;; downstream functions that call this).
+(defun org-caldav-convert-event-or-todo (todo-p)
+  "Helper for `org-caldav-convert-event', `org-caldav-convert-todo'."
   (let ((decoded (decode-coding-region (point-min) (point-max) 'utf-8 t)))
     (erase-buffer)
     (set-buffer-multibyte t)
@@ -1881,74 +1815,87 @@ which can be fed into `org-caldav-insert-org-todo'."
     (insert decoded))
   (goto-char (point-min))
   (let* ((calendar-date-style 'european)
-          (ical-list (icalendar--read-element nil nil))
-          (e (car (org-caldav--icalendar--all-todos ical-list)))
-          (zone-map (icalendar--convert-all-timezones ical-list))
-          (dtstart (icalendar--get-event-property e 'DTSTART))
-          (dtstart-zone (icalendar--find-time-zone
-                          (icalendar--get-event-property-attributes
-                            e 'DTSTART)
-                          zone-map))
-          (dtstart-dec (icalendar--decode-isodatetime dtstart nil
-                         dtstart-zone))
-          (start-d (icalendar--datetime-to-diary-date
-                     dtstart-dec))
-          (start-t (if dtstart-dec (icalendar--datetime-to-colontime dtstart-dec) nil))
-          (dtdue (icalendar--get-event-property e 'DUE))
-          (dtdue-zone (icalendar--find-time-zone
-                        (icalendar--get-event-property-attributes
-                          e 'DUE)
-                        zone-map))
-          (dtdue-dec (icalendar--decode-isodatetime dtdue
-                       nil dtdue-zone))
-          (due-d (icalendar--datetime-to-diary-date
-                   dtdue-dec))
-          (due-t (if dtdue-dec (icalendar--datetime-to-colontime dtdue-dec) nil))
-          (status (icalendar--get-event-property e 'STATUS))
-          (dtcompleted (icalendar--get-event-property e 'COMPLETED))
-          (dtcompleted-zone (icalendar--find-time-zone
-                              (icalendar--get-event-property-attributes
-                                e 'COMPLETED)
-                              zone-map))
-          (dtcompleted-dec (icalendar--decode-isodatetime dtcompleted
-                             nil dtcompleted-zone))
-          (completed-d (icalendar--datetime-to-diary-date
-                         dtcompleted-dec))
-          (completed-t (if dtcompleted-dec (icalendar--datetime-to-colontime dtcompleted-dec) nil))
-          (summary (icalendar--convert-string-for-import
-                     (or (icalendar--get-event-property e 'SUMMARY)
-                       "No Title")))
-          (description (icalendar--convert-string-for-import
-                         (or (icalendar--get-event-property e 'DESCRIPTION)
-                           "")))
-          (priority (icalendar--get-event-property e 'PRIORITY))
-          (stat (icalendar--get-event-property e 'STATUS)))
-    ;; check wether start-time is missing
-    (if (and dtstart
-          (string=
-            (cadr (icalendar--get-event-property-attributes
-                    e 'DTSTART))
-            "DATE"))
-      (setq start-t nil))
-    ;; same for due-time
-    (if (and dtdue
-          (string=
-            (cadr (icalendar--get-event-property-attributes
-                    e 'DUE))
-            "DATE"))
-      (setq due-t nil))
-    ;; and completed
-    (if (and dtcompleted
-          (string=
-            (cadr (icalendar--get-event-property-attributes
-                    e 'COMPLETED))
-            "DATE"))
-      (setq completed-t nil))
-    (list start-d start-t
-      due-d due-t
-      priority status
-      summary description
-      completed-d completed-t)))
+	 (ical-list (icalendar--read-element nil nil))
+	 (e (car (if todo-p
+                     (org-caldav--icalendar--all-todos ical-list)
+                   (icalendar--all-events ical-list))))
+	 (zone-map (icalendar--convert-all-timezones ical-list))
+         (dtstart-plist (org-caldav--event-date-plist e 'DTSTART zone-map))
+         (start-d (plist-get dtstart-plist :date-diary))
+         (start-t (plist-get dtstart-plist :date-colontime))
+	 (summary (icalendar--convert-string-for-import
+		   (or (icalendar--get-event-property e 'SUMMARY)
+		       "No Title")))
+	 (description (icalendar--convert-string-for-import
+		       (or (icalendar--get-event-property e 'DESCRIPTION)
+			   ""))))
+    (if todo-p
+        ;; Convert VTODO
+        (let* ((dtdue-plist (org-caldav--event-date-plist e 'DUE zone-map))
+               (dtcomplete-plist (org-caldav--event-date-plist
+                                  e 'COMPLETED zone-map)))
+          (list start-d start-t
+                (plist-get dtdue-plist :date-diary)
+                (plist-get dtdue-plist :date-colontime)
+                (icalendar--get-event-property e 'PRIORITY)
+                (icalendar--get-event-property e 'STATUS)
+                summary description
+                (plist-get dtcomplete-plist :date-diary)
+                (plist-get dtcomplete-plist :date-colontime)))
+      ;; Convert VEVENT
+      (let* ((dtend-plist (org-caldav--event-date-plist e 'DTEND zone-map))
+             (dtend-dec (plist-get dtend-plist :date-decoded))
+             (dtend-1-dec (icalendar--decode-isodatetime
+                           (plist-get dtend-plist :date-properties) -1
+                           (plist-get dtend-plist :date-zone)))
+	     e-type
+             (location (icalendar--convert-string-for-import
+                        (or (icalendar--get-event-property e 'LOCATION)
+                            "")))
+	     (duration (icalendar--get-event-property e 'DURATION)))
+        (when (string-match "^\\(?:\\(DL\\|S\\):\s+\\)?\\(.*\\)$" summary)
+          (setq e-type (match-string 1 summary))
+          (setq summary (match-string 2 summary)))
+        (when duration
+          (let ((dtend-dec-d (icalendar--add-decoded-times
+                              (plist-get dtstart-plist :date-decoded)
+			      (icalendar--decode-isoduration duration)))
+	        (dtend-1-dec-d (icalendar--add-decoded-times
+                              (plist-get dtstart-plist :date-decoded)
+			        (icalendar--decode-isoduration duration
+							       t))))
+	    (if (and dtend-dec (not (eq dtend-dec dtend-dec-d)))
+	        (message "Inconsistent endtime and duration for %s"
+		         summary))
+	    (setq dtend-dec dtend-dec-d)
+	    (setq dtend-1-dec dtend-1-dec-d)))
+        (let ((end-t (org-caldav--datetime-to-colontime
+                      dtend-dec e 'DTEND start-t)))
+          ;; Return result
+          (list start-d start-t
+	        (if end-t
+                    (if dtend-dec
+		        (icalendar--datetime-to-diary-date dtend-dec)
+		      start-d)
+                  (if dtend-1-dec
+		      (icalendar--datetime-to-diary-date dtend-1-dec)
+		    start-d))
+	        end-t summary description location e-type))))))
+
+;; The following is taken from icalendar.el, written by Ulf Jasper.
+;; The LOCATION property is added the extracted list
+(defun org-caldav-convert-event ()
+  "Convert icalendar event in current buffer.
+Returns a list '(start-d start-t end-d end-t summary description location)'
+which can be fed into `org-caldav-insert-org-entry'."
+  (org-caldav-convert-event-or-todo nil))
+
+(defun org-caldav-convert-todo ()
+  "Convert icalendar todo in current buffer.
+Returns a list '(start-d start-t due-d due-t priority status
+summary description completed-d completed-t)' which can be fed
+into `org-caldav-insert-org-todo'."
+  (org-caldav-convert-event-or-todo t))
 
 
 ;; This is adapted from url-dav.el, written by Bill Perry.
@@ -1982,6 +1929,9 @@ This witches to OAuth2 if necessary."
        (format "Failed to put URL %s after %d tries with error %s"
                url org-caldav-retry-attempts errormessage)))
     (< counter org-caldav-retry-attempts)))
+
+;; TODO: Delete `org-caldav-import-ics-buffer-to-org' and
+;; `org-caldav-import-ics-to-org'? They are not called anywyere.
 
 ;;;###autoload
 (defun org-caldav-import-ics-buffer-to-org ()
