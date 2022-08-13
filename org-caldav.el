@@ -951,6 +951,8 @@ ICSBUF is the buffer containing the exported iCalendar file."
 	  (org-caldav-cleanup-ics-description)
 	  (org-caldav-maybe-fix-timezone)
           (org-caldav-fix-todo-sequence)
+          ;; TODO Add back the fix for empty priority
+          ;; TODO Add back the fix for non-TODO/DONE status
 	  (org-caldav-set-sequence-number cur event-etag)
 	  (message "Putting event %d of %d" counter (length events))
 	  (if (org-caldav-put-event icsbuf)
@@ -1101,64 +1103,48 @@ returned as a cons (POINT . LEVEL)."
 			(org-caldav-filter-events 'changed-in-cal)))
 	(url-show-status nil)
 	(counter 0)
-        eventdata buf uid timesync vevent vtodo)
+	eventdata-alist buf uid timesync is-todo)
 
     (dolist (cur events)
       (catch 'next
 	(setq uid (car cur))
 	(setq counter (1+ counter))
-        (setq vtodo nil vevent nil)
 	(message "Getting event %d of %d" counter (length events))
 	(with-current-buffer (org-caldav-get-event uid)
 	  ;; Get sequence number
 	  (goto-char (point-min))
-          ;; set vevent or vtodo
-	  (save-excursion
-	    (when (re-search-forward "^BEGIN:VTODO$" nil t)
-              (when org-caldav-sync-todo
-                (setq vtodo t))
-              (org-caldav-debug-print 2 (format "This is a todo: %s" uid))
-              (unless org-caldav-sync-todo
-                (org-caldav-debug-print 2 "But org-caldav-sync-todo is nil."))))
+          (setq is-todo (when (save-excursion (re-search-forward
+                                               "^BEGIN:VTODO$" nil t))
+                          t))
+	  (when (and is-todo (not org-caldav-sync-todo))
+	    (message "Skipping TODO entry.")
+	    (org-caldav-event-set-status cur 'ignored)
+	    (throw 'next nil))
           (save-excursion
-            (when (re-search-forward "^BEGIN:VEVENT$" nil t)
-              (setq vevent t)
-              (org-caldav-debug-print 2 (format "This is a event: %s" uid))))
-	  (save-excursion
 	    (when (re-search-forward "^SEQUENCE:\\s-*\\([0-9]+\\)" nil t)
 	      (org-caldav-event-set-sequence
 	       cur (string-to-number (match-string 1)))))
-          (when vevent
-            (setq eventdata (org-caldav-convert-event)))
-          (when vtodo
-            (setq tododata (org-caldav-convert-todo))
-            (org-caldav-debug-print 2 tododata))
-          ;; stop here if not vevent or vtodo
-          (unless (or vevent vtodo)
-            (org-caldav-debug-print 1 (format "UID %s it neither vevent nor vtodo and cannot be processed." uid))
-            (throw 'next nil)))
+	  (setq eventdata-alist (org-caldav-convert-event-or-todo is-todo)))
 	(cond
 	 ((eq (org-caldav-event-status cur) 'new-in-cal)
 	  ;; This is a new event.
-          (condition-case err
+	  (condition-case nil
 	      (with-current-buffer (find-file-noselect
 				    (org-caldav-inbox-file org-caldav-inbox))
 		(let ((point-and-level (org-caldav-inbox-point-and-level org-caldav-inbox)))
 		  (org-caldav-debug-print
 		   1 (format "Event UID %s: New in Cal --> Org inbox." uid))
 		  (goto-char (car point-and-level))
-                  (when vevent
-                    (apply 'org-caldav-insert-org-entry
-                      (append eventdata (list uid (cdr point-and-level)))))
-                  (when vtodo
-                    (apply 'org-caldav-insert-org-todo
-                      (append tododata (list uid (cdr point-and-level))))))
+		  (org-caldav-insert-org-event-or-todo
+		   (append eventdata-alist
+                           `((uid . ,uid)
+                             (level . ,(cdr point-and-level))))))
 		(push (list org-caldav-calendar-id uid
 			    (org-caldav-event-status cur) 'cal->org)
 		      org-caldav-sync-result)
 		(setq buf (current-buffer)))
 	    (error
-             ;; Failed to insert new event/todo
+	     ;; inbox file/headline could not be found
 	     (org-caldav-event-set-status cur 'error)
 	     (push (list org-caldav-calendar-id uid
 			 (org-caldav-event-status cur) 'error:inbox-notfound)
@@ -1175,13 +1161,67 @@ which can only be synced to calendar. Ignoring." uid))
 		org-caldav-sync-result)
 	  (throw 'next nil))
 	 (t
-          ;; This is a changed event.
-          (org-caldav-debug-print
-           1 (format "Event UID %s: Changed in Cal --> Org" uid))
-           (cond (vevent (org-caldav-update-org-event))
-             (vtodo (org-caldav-update-org-todo))
-             (t (throw 'strange "Something strange has happend.")))
-           ))
+	  ;; This is a changed event.
+	  (org-caldav-debug-print
+	   1 (format "Event UID %s: Changed in Cal --> Org" uid))
+	  (let-alist (append eventdata-alist
+                             `((marker . ,(org-id-find (car cur) t))))
+	    (when (null .marker)
+	      (error "Could not find UID %s." (car cur)))
+	    (with-current-buffer (marker-buffer .marker)
+	      (goto-char (marker-position .marker))
+	      (when org-caldav-backup-file
+		(org-caldav-backup-item))
+	      ;; See what we should sync.
+	      (when (or (eq org-caldav-sync-changes-to-org 'title-only)
+			(eq org-caldav-sync-changes-to-org 'title-and-timestamp))
+		;; Sync title
+		(org-caldav-change-heading .summary)
+                (if (not is-todo)
+                    ;; Sync location
+		    (org-caldav-change-location .location)
+                  (let ((vprio (org-caldav-todo-priority-from-num
+                                (string-to-number (or .priority "0")))))
+                    ;; Sync priority
+                    ;; TODO: Set priority to " " when priority is missing?
+                    (when vprio (org-priority vprio))
+                    ;; Sync todo status
+                    (org-todo (org-caldav-todo-keyword-from-status .status)))))
+	      (when (or (eq org-caldav-sync-changes-to-org 'timestamp-only)
+			(eq org-caldav-sync-changes-to-org 'title-and-timestamp))
+                (if (not is-todo)
+                    ;; Sync timestamp
+		    (setq timesync
+		          (org-caldav-change-timestamp
+                           (org-caldav-create-time-range
+                            .start-d .start-t .end-d .end-t .end-type)))
+                  ;; Sync scheduled
+                  (when .start-d
+                    (org--deadline-or-schedule
+                     nil 'scheduled (org-caldav-convert-to-org-time
+                                     .start-d .start-t)))
+                  ;; Sync deadline
+                  (when .due-d
+                    (org--deadline-or-schedule
+                     nil 'deadline (org-caldav-convert-to-org-time
+                                    .due-d .due-t)))
+                  ;; Sync completion time
+                  (when .complete-d (org-add-planning-info
+                                     'closed (org-caldav-convert-to-org-time
+                                              .completed-d .completed-t)))))
+	      (when (eq org-caldav-sync-changes-to-org 'all)
+		;; Sync everything, so first remove the old one.
+		(let ((level (org-current-level)))
+		  (delete-region (org-entry-beginning-position)
+				 (org-entry-end-position))
+		  (org-caldav-insert-org-entry-list
+		   (append eventdata-alist `((uid . ,uid) (level . ,level))))))
+	      (setq buf (current-buffer))
+	      (push (list org-caldav-calendar-id uid
+			  (org-caldav-event-status cur)
+			  (if (eq timesync 'orgsexp)
+			      'error:changed-orgsexp 'cal->org))
+		    org-caldav-sync-result)))))
 	;; Update the event database.
 	(org-caldav-event-set-status cur 'synced)
 	(with-current-buffer buf
@@ -1205,83 +1245,6 @@ which can only be synced to calendar. Ignoring." uid))
 	(push (list org-caldav-calendar-id (car cur)
 		    'deleted-in-cal 'removed-from-org)
 	      org-caldav-sync-result)))))
-
-(defun org-caldav-update-org-event ()
-  "Updates the org entry."
-  ;; no variables needed because this is only run in a specific context
-  (let ((marker (org-id-find (car cur) t)))
-    (when (null marker)
-      (error "Could not find UID %s." (car cur)))
-    (with-current-buffer (marker-buffer marker)
-      (goto-char (marker-position marker))
-      (when org-caldav-backup-file
-	(org-caldav-backup-item))
-      ;; See what we should sync.
-      (when (or (eq org-caldav-sync-changes-to-org 'title-only)
-		(eq org-caldav-sync-changes-to-org 'title-and-timestamp))
-	;; Sync title
-	(org-caldav-change-heading (nth 4 eventdata))
-	;; and location
-	(org-caldav-change-location (nth 6 eventdata)))
-      (when (or (eq org-caldav-sync-changes-to-org 'timestamp-only)
-		(eq org-caldav-sync-changes-to-org 'title-and-timestamp))
-	;; Sync timestamp
-	(setq timesync
-	      (org-caldav-change-timestamp
-	       (apply 'org-caldav-create-time-range (append (seq-take eventdata 4) (list (nth 7 eventdata)))))))
-      (when (eq org-caldav-sync-changes-to-org 'all)
-	;; Sync everything, so first remove the old one.
-	(let ((level (org-current-level)))
-	  (delete-region (org-entry-beginning-position)
-			 (org-entry-end-position))
-	  (apply 'org-caldav-insert-org-entry
-		 (append eventdata (list uid level)))))
-      (setq buf (current-buffer))
-      (push (list org-caldav-calendar-id uid
-		  (org-caldav-event-status cur)
-		  (if (eq timesync 'orgsexp)
-		      'error:changed-orgsexp 'cal->org))
-	    org-caldav-sync-result))))
-
-;; TODO: Merge with org-caldav-update-org-event
-(defun org-caldav-update-org-todo ()
-  "Updates the todo entry.
-This will update:  heading, priority, todo-state, scheduled, deadline.
-This will not update description (at the moment)."
-    ;; no variables needed because this is only run in a specific context
-  (let ((marker (org-id-find (car cur) t)))
-    (when (null marker)
-      (error "Could not find UID %s." (car cur)))
-    (with-current-buffer (marker-buffer marker)
-      (goto-char (marker-position marker))
-      (when org-caldav-backup-file
-        (org-caldav-backup-item))
-      ;; heading
-      (org-caldav-change-heading (nth 6 tododata))
-      ;; priority
-      (let* ((nprio (string-to-number (or (nth 4 tododata) "0")))
-              (r nil)
-              (vprio (org-caldav-todo-priority-from-num nprio)))
-        (when vprio
-          (org-priority vprio)))
-      ;; Update the todo-state
-      (org-todo (org-caldav-todo-keyword-from-status (nth 5 tododata)))
-      ;; scheduled, deadline
-      (when (nth 0 tododata)
-        (org--deadline-or-schedule nil 'scheduled
-          (org-caldav-convert-to-org-time (nth 0 tododata) (nth 1 tododata))))
-      (when (nth 2 tododata)
-        (org--deadline-or-schedule nil 'deadline (org-caldav-convert-to-org-time (nth 2 tododata) (nth 3 tododata))))
-      (when (nth 8 tododata)
-        (org-add-planning-info 'closed
-          (org-caldav-convert-to-org-time (nth 8 tododata) (nth 9 tododata))))
-      (setq buf (current-buffer))
-      (push (list org-caldav-calendar-id uid
-              (org-caldav-event-status cur)
-              (if (eq timesync 'orgsexp)
-                'error:changed-orgsexp 'cal->org))
-        org-caldav-sync-result))))
-
 
 (defun org-caldav-change-heading (newheading)
   "Change heading from Org item under point to NEWHEADING."
@@ -1497,6 +1460,20 @@ Do nothing if LEVEL is larger than `org-caldav-debug-level'."
   (> (buffer-size) (- (point-max)
 		      (point-min))))
 
+(defun org-caldav-insert-org-event-or-todo (eventdata-alist)
+  "Insert org block from given event data at current position.
+Elements of EVENTDATA-ALIST are passed on as arguments to
+`org-caldav-insert-org-entry' and `org-caldav-insert-org-todo'.
+Returns MD5 from entry."
+  (let-alist eventdata-alist
+    (if (eq .component-type 'todo)
+        (org-caldav-insert-org-todo
+         .start-d .start-t .due-d .due-t .priority .status
+         .summary .description .completed-d .completed-t .uid .level)
+      (org-caldav-insert-org-entry
+       .start-d .start-t .end-d .end-t .summary
+       .description .location .e-type .uid .level))))
+
 (defun org-caldav-insert-org-entry (start-d start-t end-d end-t
                                             summary description location e-type
                                             &optional uid level)
@@ -1516,18 +1493,9 @@ Returns MD5 from entry."
   (when (> (length description) 0)
     (insert "  " description "\n"))
   (forward-line -1)
-  (when uid
-    (org-set-property "ID" (url-unhex-string uid)))
   (org-caldav-change-location location)
-  (org-back-to-heading)
-  (org-set-tags-to org-caldav-select-tags)
-  (md5 (buffer-substring-no-properties
-	(org-entry-beginning-position)
-	(org-entry-end-position))))
+  (org-caldav-insert-org-entry--set-uid-return-md5 uid))
 
-;; TODO merge with org-caldav-insert-org-entry?
-
-;; copy from org-caldav-insert-org-entry, and adjusted to vtodo
 (defun org-caldav-insert-org-todo (start-d start-t due-d due-t
                                     priority status summary description
                                     completed-d completed-t
@@ -1542,30 +1510,37 @@ If UID is nil, no UID: property is written.
 If LEVEL is nil, it defaults to 1.
 
 Returns MD5 from entry."
-  (let* ((nprio (string-to-number (or priority "0")))
-          (r nil)
-          (vprio (org-caldav-todo-priority-from-num nprio))
+  (let* ((vprio (org-caldav-todo-priority-from-num
+                 (string-to-number (or priority "0"))))
           (prio (if vprio (concat "[#" (char-to-string vprio) "] ") "")))
-    (insert (make-string (or level 1) ?*)
-            " "
-            (org-caldav-todo-keyword-from-status status)
-            " "
-            prio summary "\n"))
+    (insert
+     (make-string (or level 1) ?*) " "
+     (org-caldav-todo-keyword-from-status status) " "
+     prio summary "\n"))
   (when start-d
-    (org--deadline-or-schedule nil 'scheduled (org-caldav-convert-to-org-time start-d start-t)))
+    (org--deadline-or-schedule
+     nil 'scheduled (org-caldav-convert-to-org-time start-d start-t)))
   (when due-d
-    (org--deadline-or-schedule nil 'deadline (org-caldav-convert-to-org-time due-d due-t)))
+    (org--deadline-or-schedule
+     nil 'deadline (org-caldav-convert-to-org-time due-d due-t)))
   (when completed-d
-    (org-add-planning-info 'closed (org-caldav-convert-to-org-time completed-d completed-t)))
+    (org-add-planning-info
+     'closed (org-caldav-convert-to-org-time completed-d completed-t)))
   (when (> (length description) 0)
     (insert "  " description "\n"))
-  ;; (forward-line -1)
+  ;;(forward-line -1)
+  (org-caldav-insert-org-entry--set-uid-return-md5 uid))
+
+(defun org-caldav-insert-org-entry--set-uid-return-md5 (uid)
+  "Finish inserting an org entry or todo.
+Sets the block's UID and tags, and return its MD5."
   (when uid
     (org-set-property "ID" (url-unhex-string uid)))
+  (org-back-to-heading)
   (org-set-tags-to org-caldav-select-tags)
   (md5 (buffer-substring-no-properties
-         (org-entry-beginning-position)
-         (org-entry-end-position))))
+	(org-entry-beginning-position)
+	(org-entry-end-position))))
 
 (defun org-caldav-todo-keyword-from-status (status)
   "Convert VTODO STATUS to org-todo-keywords.
@@ -1788,11 +1763,11 @@ puts them in a plist."
 		    e property)
 		   zone-map))
 	 (dt-dec (icalendar--decode-isodatetime dt-prop nil dt-zone)))
-    (list :date-properties dt-prop
-          :date-zone dt-zone
-          :date-decoded dt-dec
-          :date-diary (icalendar--datetime-to-diary-date dt-dec)
-          :date-colontime (org-caldav--datetime-to-colontime dt-dec e property))))
+    (list 'event-property dt-prop
+          'zone dt-zone
+          'decoded dt-dec
+          'date (icalendar--datetime-to-diary-date dt-dec)
+          'time (org-caldav--datetime-to-colontime dt-dec e property))))
 
 (defun org-caldav--icalendar--all-todos (icalendar)
   "Return the list of all existing todos in the given ICALENDAR."
@@ -1803,11 +1778,12 @@ puts them in a plist."
       (nreverse icalendar))
     result))
 
-;; TODO: Replace org-caldav-convert-event/todo with direct calls to
-;; this function. Also, return a plist (need to also the change
-;; downstream functions that call this).
-(defun org-caldav-convert-event-or-todo (todo-p)
-  "Helper for `org-caldav-convert-event', `org-caldav-convert-todo'."
+;; The following is taken from icalendar.el, written by Ulf Jasper.
+;; The LOCATION property is added the extracted list
+(defun org-caldav-convert-event-or-todo (is-todo)
+  "Convert icalendar event or todo in current buffer.
+If IS-TODO, it is a VTODO, else a VEVENT.  Returns an alist of properties
+which can be fed into `org-caldav-insert-org-event-or-todo'."
   (let ((decoded (decode-coding-region (point-min) (point-max) 'utf-8 t)))
     (erase-buffer)
     (set-buffer-multibyte t)
@@ -1816,87 +1792,86 @@ puts them in a plist."
   (goto-char (point-min))
   (let* ((calendar-date-style 'european)
 	 (ical-list (icalendar--read-element nil nil))
-	 (e (car (if todo-p
+	 (e (car (if is-todo
                      (org-caldav--icalendar--all-todos ical-list)
                    (icalendar--all-events ical-list))))
 	 (zone-map (icalendar--convert-all-timezones ical-list))
          (dtstart-plist (org-caldav--event-date-plist e 'DTSTART zone-map))
-         (start-d (plist-get dtstart-plist :date-diary))
-         (start-t (plist-get dtstart-plist :date-colontime))
-	 (summary (icalendar--convert-string-for-import
-		   (or (icalendar--get-event-property e 'SUMMARY)
-		       "No Title")))
-	 (description (icalendar--convert-string-for-import
-		       (or (icalendar--get-event-property e 'DESCRIPTION)
-			   ""))))
-    (if todo-p
-        ;; Convert VTODO
-        (let* ((dtdue-plist (org-caldav--event-date-plist e 'DUE zone-map))
-               (dtcomplete-plist (org-caldav--event-date-plist
-                                  e 'COMPLETED zone-map)))
-          (list start-d start-t
-                (plist-get dtdue-plist :date-diary)
-                (plist-get dtdue-plist :date-colontime)
-                (icalendar--get-event-property e 'PRIORITY)
-                (icalendar--get-event-property e 'STATUS)
-                summary description
-                (plist-get dtcomplete-plist :date-diary)
-                (plist-get dtcomplete-plist :date-colontime)))
-      ;; Convert VEVENT
-      (let* ((dtend-plist (org-caldav--event-date-plist e 'DTEND zone-map))
-             (dtend-dec (plist-get dtend-plist :date-decoded))
-             (dtend-1-dec (icalendar--decode-isodatetime
-                           (plist-get dtend-plist :date-properties) -1
-                           (plist-get dtend-plist :date-zone)))
-	     e-type
-             (location (icalendar--convert-string-for-import
-                        (or (icalendar--get-event-property e 'LOCATION)
-                            "")))
-	     (duration (icalendar--get-event-property e 'DURATION)))
-        (when (string-match "^\\(?:\\(DL\\|S\\):\s+\\)?\\(.*\\)$" summary)
-          (setq e-type (match-string 1 summary))
-          (setq summary (match-string 2 summary)))
-        (when duration
-          (let ((dtend-dec-d (icalendar--add-decoded-times
-                              (plist-get dtstart-plist :date-decoded)
-			      (icalendar--decode-isoduration duration)))
-	        (dtend-1-dec-d (icalendar--add-decoded-times
-                              (plist-get dtstart-plist :date-decoded)
-			        (icalendar--decode-isoduration duration
-							       t))))
-	    (if (and dtend-dec (not (eq dtend-dec dtend-dec-d)))
-	        (message "Inconsistent endtime and duration for %s"
-		         summary))
-	    (setq dtend-dec dtend-dec-d)
-	    (setq dtend-1-dec dtend-1-dec-d)))
-        (let ((end-t (org-caldav--datetime-to-colontime
-                      dtend-dec e 'DTEND start-t)))
-          ;; Return result
-          (list start-d start-t
-	        (if end-t
-                    (if dtend-dec
-		        (icalendar--datetime-to-diary-date dtend-dec)
-		      start-d)
-                  (if dtend-1-dec
-		      (icalendar--datetime-to-diary-date dtend-1-dec)
-		    start-d))
-	        end-t summary description location e-type))))))
+         (eventdata-alist
+          `((start-d . ,(plist-get dtstart-plist 'date))
+            (start-t . ,(plist-get dtstart-plist 'time))
+            (dtstart-dec . ,(plist-get dtstart-plist 'decoded))
+            (summary . ,(icalendar--convert-string-for-import
+		         (or (icalendar--get-event-property e 'SUMMARY)
+		             "No Title")))
+            (description . ,(icalendar--convert-string-for-import
+		             (or (icalendar--get-event-property e 'DESCRIPTION)
+			         ""))))))
+    (if is-todo
+        (org-caldav-convert-event-or-todo--todo e zone-map eventdata-alist)
+      (org-caldav-convert-event-or-todo--event e zone-map eventdata-alist))))
 
-;; The following is taken from icalendar.el, written by Ulf Jasper.
-;; The LOCATION property is added the extracted list
-(defun org-caldav-convert-event ()
-  "Convert icalendar event in current buffer.
-Returns a list '(start-d start-t end-d end-t summary description location)'
-which can be fed into `org-caldav-insert-org-entry'."
-  (org-caldav-convert-event-or-todo nil))
+(defun org-caldav-convert-event-or-todo--event (e zone-map eventdata-alist)
+  "Helper function of `org-caldav-event-or-todo' to handle VEVENT."
+  (let* ((start-d (cdr (assq 'start-d eventdata-alist)))
+         (start-t (cdr (assq 'start-t eventdata-alist)))
+         (dtstart-dec (cdr (assq 'dtstart-dec eventdata-alist)))
+         (summary (cdr (assq 'summary eventdata-alist)))
+         (dtend-plist (org-caldav--event-date-plist e 'DTEND zone-map))
+	 (dtend-dec (plist-get dtend-plist 'decoded))
+	 (dtend-1-dec (icalendar--decode-isodatetime
+		       (plist-get dtend-plist 'event-property) -1
+		       (plist-get dtend-plist 'zone)))
+	 e-type
+	 (duration (icalendar--get-event-property e 'DURATION)))
+    (when (string-match "^\\(?:\\(DL\\|S\\):\s+\\)?\\(.*\\)$" summary)
+      (setq e-type (match-string 1 summary))
+      (setq summary (match-string 2 summary)))
+    (when duration
+      (let ((dtend-dec-d (icalendar--add-decoded-times
+			  dtstart-dec
+			  (icalendar--decode-isoduration duration)))
+	    (dtend-1-dec-d (icalendar--add-decoded-times
+			    dtstart-dec
+			    (icalendar--decode-isoduration duration
+							   t))))
+	(if (and dtend-dec (not (eq dtend-dec dtend-dec-d)))
+	    (message "Inconsistent endtime and duration for %s"
+		     summary))
+	(setq dtend-dec dtend-dec-d)
+	(setq dtend-1-dec dtend-1-dec-d)))
+    (let ((end-t (org-caldav--datetime-to-colontime
+		  dtend-dec e 'DTEND start-t)))
+      ;; Return result
+      (append `((component-type . event)
+		(end-d
+		 . ,(if end-t
+			(if dtend-dec
+			    (icalendar--datetime-to-diary-date dtend-dec)
+			  start-d)
+		      (if dtend-1-dec
+			  (icalendar--datetime-to-diary-date dtend-1-dec)
+			start-d)))
+		(end-t . ,end-t)
+		(location
+		 . ,(icalendar--convert-string-for-import
+		     (or (icalendar--get-event-property e 'LOCATION) "")))
+		(end-type . ,e-type))
+	      eventdata-alist))))
 
-(defun org-caldav-convert-todo ()
-  "Convert icalendar todo in current buffer.
-Returns a list '(start-d start-t due-d due-t priority status
-summary description completed-d completed-t)' which can be fed
-into `org-caldav-insert-org-todo'."
-  (org-caldav-convert-event-or-todo t))
-
+(defun org-caldav-convert-event-or-todo--todo (e zone-map eventdata-alist)
+  "Helper function of `org-caldav-event-or-todo' to handle VTODO."
+  (let* ((dtdue-plist (org-caldav--event-date-plist e 'DUE zone-map))
+	 (dtcomplete-plist (org-caldav--event-date-plist
+			    e 'COMPLETED zone-map)))
+    (append `((component-type . todo)
+	      (due-d . ,(plist-get dtdue-plist 'date))
+	      (due-t . ,(plist-get dtdue-plist 'time))
+	      (priority . ,(icalendar--get-event-property e 'PRIORITY))
+	      (status . ,(icalendar--get-event-property e 'STATUS))
+	      (completed-d . ,(plist-get dtcomplete-plist 'date))
+	      (completed-t . ,(plist-get dtcomplete-plist 'time)))
+	    eventdata-alist)))
 
 ;; This is adapted from url-dav.el, written by Bill Perry.
 ;; This does more error checking on the headers and retries
@@ -1930,21 +1905,18 @@ This witches to OAuth2 if necessary."
                url org-caldav-retry-attempts errormessage)))
     (< counter org-caldav-retry-attempts)))
 
-;; TODO: Delete `org-caldav-import-ics-buffer-to-org' and
-;; `org-caldav-import-ics-to-org'? They are not called anywyere.
-
 ;;;###autoload
 (defun org-caldav-import-ics-buffer-to-org ()
   "Add ics content in current buffer to `org-caldav-inbox'."
-  (let ((event (org-caldav-convert-event))
+  (let ((event (org-caldav-convert-event-or-todo))
         (file (org-caldav-inbox-file org-caldav-inbox)))
     (with-current-buffer (find-file-noselect file)
       (let* ((point-and-level (org-caldav-inbox-point-and-level org-caldav-inbox))
              (point (car point-and-level))
              (level (cdr point-and-level)))
         (goto-char point)
-        (apply #'org-caldav-insert-org-entry
-               (append event (list nil level)))
+        (org-caldav-insert-org-event-or-todo
+         (append event `((uid . nil) (level . ,level))))
         (message "%s: Added event: %s"
                  file
                  (buffer-substring
