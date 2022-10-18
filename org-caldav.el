@@ -2196,6 +2196,8 @@ which can be fed into `org-caldav-insert-org-event-or-todo'."
 		       (plist-get dtend-plist 'event-property) -1
 		       (plist-get dtend-plist 'zone)))
 	 e-type
+	 (rrule (icalendar--get-event-property e 'RRULE))
+	 (rdate (icalendar--get-event-property e 'RDATE))
 	 (duration (icalendar--get-event-property e 'DURATION)))
     (when (string-match "^\\(?:\\(DL\\|S\\):\s+\\)?\\(.*\\)$" summary)
       (setq e-type (match-string 1 summary))
