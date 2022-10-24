@@ -1461,7 +1461,7 @@ which can only be synced to calendar. Ignoring." uid))
 		    (setq timesync
 		          (org-caldav-change-timestamp
                            (org-caldav-create-time-range
-                            .start-d .start-t .end-d .end-t .end-type)))
+                            .start-d .start-t .end-d .end-t .end-type .freq)))
                   ;; Sync scheduled
                   (when .start-d
                     (org--deadline-or-schedule
@@ -1793,7 +1793,7 @@ Returns MD5 from entry."
          .uid .level)
       (org-caldav-insert-org-entry
        .start-d .start-t .end-d .end-t .summary
-       .description .location .e-type .uid .level))))
+       .description .location .e-type .freq .uid .level))))
 
 (defun org-caldav-insert-org-entry (start-d start-t end-d end-t
 											summary description location e-type freq
@@ -1801,6 +1801,7 @@ Returns MD5 from entry."
   "Insert org block from given data at current position.
 START/END-D: Start/End date.  START/END-T: Start/End time.
 SUMMARY, DESCRIPTION, LOCATION, UID: obvious.
+FREQ: Start org datetime with recursive option.
 Dates must be given in a format `org-read-date' can parse.
 
 If LOCATION is \"\", no LOCATION: property is written.
@@ -1810,7 +1811,7 @@ If LEVEL is nil, it defaults to 1.
 Returns MD5 from entry."
   (insert (make-string (or level 1) ?*) " " summary "\n")
   (insert (if org-adapt-indentation "  " "")
-   (org-caldav-create-time-range start-d start-t end-d end-t e-type) "\n")
+   (org-caldav-create-time-range start-d start-t end-d end-t e-type freq) "\n")
   (when (> (length description) 0)
     (insert "  " description "\n"))
   (forward-line -1)
@@ -1831,7 +1832,6 @@ PRIORITY: 0-9, PERCENT-COMPLETE: 0-100.
 See `org-caldav-todo-priority' and
 `org-caldav-todo-percent-states' for explanations how this values
 are used.
-FREQ: Start org datetime with recursive option.
 SUMMARY, DESCRIPTION, UID: obvious.
 Dates must be given in a format `org-read-date' can parse.
 
@@ -2241,7 +2241,8 @@ which can be fed into `org-caldav-insert-org-event-or-todo'."
 		(location
 		 . ,(icalendar--convert-string-for-import
 		     (or (icalendar--get-event-property e 'LOCATION) "")))
-		(end-type . ,e-type))
+		(end-type . ,e-type)
+                (freq . ,freq))
 	      eventdata-alist))))
 
 (defun org-caldav-convert-event-or-todo--todo (e zone-map eventdata-alist)

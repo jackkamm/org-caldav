@@ -503,7 +503,7 @@ Org task 2
 
 (ert-deftest org-caldav-03-insert-org-entry ()
   "Make sure that `org-caldav-insert-org-entry' works fine."
-  (let ((entry '("01 01 2015" "19:00" "01 01 2015" "20:00" "The summary" "The description" "location" nil))
+  (let ((entry '("01 01 2015" "19:00" "01 01 2015" "20:00" "The summary" "The description" "location" nil nil))
         (org-caldav-select-tags ""))
     (cl-flet ((write-entry (uid level)
                            (with-temp-buffer
