@@ -42,6 +42,9 @@
 (require 'cl-lib)
 (require 'button)
 
+(declare-function oauth2-url-retrieve-synchronously "ext:oauth2" (&rest args))
+(declare-function oauth2-auth-and-store "ext:oauth2" (&rest args))
+
 (defgroup org-caldav nil
   "Sync org files with external calendar through CalDAV."
   :prefix "org-caldav-"
@@ -1548,7 +1551,7 @@ which can only be synced to calendar. Ignoring." uid))
 (defun org-caldav--org-show-subtree ()
   "Helper function for compatibility.
 To be removed when org dependency reaches >=9.6."
-  (if (featurep 'org-fold)
+  (if (fboundp 'org-fold-show-subtree)
       (org-fold-show-subtree)
     (org-caldav--suppress-obsolete-warning org-show-subtree
       (org-show-subtree))))
