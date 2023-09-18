@@ -35,14 +35,15 @@
 
 (require 'url-dav)
 (require 'url-http) ;; b/c of Emacs bug
-(require 'ox-icalendar)
 (require 'org-id)
 (require 'icalendar)
 (require 'url-util)
 (require 'cl-lib)
 (require 'button)
 
+(require 'org-caldav-core)
 (require 'org-caldav-ical2org)
+(require 'org-caldav-ox-icalendar)
 
 (declare-function oauth2-url-retrieve-synchronously "ext:oauth2" (&rest args))
 (declare-function oauth2-auth-and-store "ext:oauth2" (&rest args))
@@ -84,17 +85,6 @@ This is usually .ics, but on some servers (davmail), it is .EML"
   "List of files which should end up in calendar.
 The file in `org-caldav-inbox' is implicitly included, so you
 don't have to add it here."
-  :type '(repeat string))
-
-(defcustom org-caldav-select-tags nil
-  "List of tags to filter the synced tasks.
-If any such tag is found in a buffer, all items that do not carry
-one of these tags will not be exported."
-  :type '(repeat string))
-
-(defcustom org-caldav-exclude-tags nil
-  "List of tags to exclude from the synced tasks.
-All items that carry one of these tags will not be exported."
   :type '(repeat string))
 
 (defcustom org-caldav-inbox "~/org/appointments.org"
@@ -195,14 +185,6 @@ might loose information in your Org items (take a look at
           (const timestamp-only :tag "Sync only the timestamp")
           (const all :tag "Sync everything")))
 
-(defcustom org-caldav-days-in-past nil
-  "Number of days before today to skip in the exported calendar.
-This makes it very easy to keep the remote calendar clean.
-
-nil means include all entries (default)
-any number set will cut the dates older than N days in the past."
-  :type 'integer)
-
 (defcustom org-caldav-delete-org-entries 'ask
   "Whether entries deleted in calendar may be deleted in Org.
 Can be one of the following symbols:
@@ -226,14 +208,6 @@ never = Never delete calendar entries"
           (const ask :tag "Ask before deletion")
           (const never :tag "Never delete calendar entries")
           (const always :tag "Always delete without asking")))
-
-(defcustom org-caldav-skip-conditions nil
-  "Conditions for skipping entries during icalendar export.
-This must be a list of conditions, which are described in the
-doc-string of `org-agenda-skip-if'.  Any entry that matches will
-not be exported.  Note that the normal `org-agenda-skip-function'
-has no effect on the icalendar exporter."
-  :type 'list)
 
 (defcustom org-caldav-backup-file
   (expand-file-name "org-caldav-backup.org" user-emacs-directory)
@@ -309,21 +283,6 @@ Note: You should check that the keywords in
 `org-caldav-todo-percent-states' are also valid keywords in
 `org-todo-keywords'."
   :type 'list)
-
-(defcustom org-caldav-todo-deadline-schedule-warning-days nil
-  "Whether to auto-create SCHEDULED timestamp from DEADLINE.
-
-When set to `t', on sync any TODO item with a DEADLINE timestamp
-will have a SCHEDULED timestamp added if it doesn't already have
-one.
-
-This uses the warning string like DEADLINE: <2017-07-05 Wed -3d>
-to a SCHEDULED <2017-07-02 Sun>.  If the warning days (here -3d)
-is not given it is taken from `org-deadline-warning-days'.
-
-This might be useful for OpenTasks users, to prevent the app from
-showing tasks which have a deadline years in the future."
-  :type 'boolean)
 
 (defcustom org-caldav-debug-level 1
   "Level of debug output in `org-caldav-debug-buffer'.
@@ -425,15 +384,6 @@ and  action = {org->cal, cal->org, error:org->cal, error:cal->org}.")
 
 (defvar org-caldav-previous-files nil
   "Files that were synced during previous run.")
-
-(defmacro org-caldav--suppress-obsolete-warning (var body)
-  "Macro for compatibility.
-To be removed when emacs dependency reaches >=27.1."
-  (declare (indent defun))
-  (if (fboundp 'with-suppressed-warnings)
-      `(with-suppressed-warnings ((obsolete ,var))
-         ,body))
-  `(with-no-warnings ,body))
 
 (defsubst org-caldav-add-event (uid md5 etag sequence status)
   "Add event with UID, MD5, ETAG and STATUS."
@@ -945,16 +895,6 @@ Are you really sure? ")))
   "True if we have to sync from org to calendar."
   (member org-caldav-sync-direction '(twoway org->cal)))
 
-(defun org-caldav-get-org-files-for-sync ()
-  "Return list of all org files for syncing.
-This adds the inbox if necessary."
-  (let ((inbox (org-caldav-inbox-file org-caldav-inbox)))
-    (append org-caldav-files
-	    (when (and inbox
-		       (org-caldav-sync-do-org->cal)
-		       (not (member inbox org-caldav-files)))
-	      (list inbox)))))
-
 (defun org-caldav-sync-calendar (&optional calendar resume)
   "Sync one calendar, optionally provided through plist CALENDAR.
 The format of CALENDAR is described in `org-caldav-calendars'.
@@ -1088,6 +1028,7 @@ ICSBUF is the buffer containing the exported iCalendar file."
                       (not (string-match (car cur) uid))))
           (unless (string-match (car cur) uid)
             (error "Could not find UID %s" (car cur)))
+          ;; TODO: Move these into org-caldav-ox-icalendar.el
           (org-caldav-narrow-event-under-point)
           (org-caldav-convert-buffer-to-crlf)
           (org-caldav-cleanup-ics-description)
@@ -1610,123 +1551,11 @@ NEWLOCATION contains newlines, replace them with
           (org-delete-property "ID")))
       (write-region (point-min) (point-max) org-caldav-backup-file t))))
 
-(defun org-caldav-skip-function (backend)
-  (org-caldav-debug-print 2 "Skipping over excluded entries")
-  (when (eq backend 'icalendar)
-    (org-map-entries
-     (lambda ()
-       (let ((pt (save-excursion (apply 'org-agenda-skip-entry-if org-caldav-skip-conditions)))
-              (ts (when org-caldav-days-in-past (* (abs org-caldav-days-in-past) -1)))
-              (stamp (or (org-entry-get nil "TIMESTAMP" t) (org-entry-get nil "CLOSED" t))))
-	 (when (or pt (and stamp ts (> ts (org-time-stamp-to-now stamp))))
-           (delete-region (point) (org-end-of-subtree t t))
-           (setq org-map-continue-from (point)))))))
-  (org-caldav-debug-print 2 "Finished skipping"))
-
 (defun org-caldav-timestamp-has-time-p (timestamp)
   "Checks whether a timestamp has a time.
 Returns nil if not and (sec min hour) if it has."
   (let ((ti (parse-time-string timestamp)))
     (or (nth 0 ti) (nth 1 ti) (nth 2 ti))))
-
-(defun org-caldav-prepare-scheduled-deadline-timestamps (orgfiles)
-  "For nextcloud (or maybe the ical standard?) in vtodo the
-scheduled and deadline have all have a time specified or none of
-them.  So we find todo items which have deadline and scheduled
-specified, but one of them has and the other do not have any
-time, and we ask the user to fix that."
-  (org-map-entries
-    (lambda ()
-      (let ((sched (org-entry-get nil "SCHEDULED"))
-             (deadl (org-entry-get nil "DEADLINE"))
-             kchoice)
-        (when (and sched deadl)
-          (when (and (org-caldav-timestamp-has-time-p sched)
-                  (not (org-caldav-timestamp-has-time-p deadl)))
-            (org-id-goto (org-id-get-create))
-            (setq kchoice (read-char-choice "Scheduled and Deadline
-            set.  For syncing you need to (s) set time on
-            DEADLINE, or (d) delete SCHEDULED time."
-                        '(?s ?d)))
-            (cond ((= kchoice ?s) (org-deadline nil))
-              ((= kchoice ?d) (org--deadline-or-schedule nil 'scheduled
-                                (replace-regexp-in-string " [0-2][0-9]:[0-5][0-9]" "" sched)))))
-          (when (and (not (org-caldav-timestamp-has-time-p sched))
-                  (org-caldav-timestamp-has-time-p deadl))
-            (org-id-goto (org-entry-get nil "ID"))
-            (setq kchoice (read-char-choice "Scheduled and Deadline
-            set.  For syncing you need to (s) set time on
-            SCHEDULED, or (d) delete DEADLINE time."
-                        '(?s ?d)))
-            (cond ((= kchoice ?s) (org-schedule nil))
-              ((= kchoice ?d) (org--deadline-or-schedule nil 'deadline
-                                (replace-regexp-in-string " [0-2][0-9]:[0-5][0-9]" "" sched))))))))
-    nil orgfiles))
-
-(defun org-caldav-create-uid (file &optional bell)
-  "Set ID property on headlines missing it in FILE.
-When optional argument BELL is non-nil, inform the user with
-a message if the file was modified. This func is the same as
-org-icalendar-create-uid except that it ignores entries that
-match org-caldav-skip-conditions."
-  (let (modified-flag)
-    (org-map-entries
-     (lambda ()
-       (let ((entry (org-element-at-point)))
-         (unless (org-element-property :ID entry)
-           (unless (apply 'org-agenda-skip-entry-if org-caldav-skip-conditions)
-             (org-id-get-create)
-             (setq modified-flag t)
-             (forward-line)))))
-     nil nil 'comment)
-    (when (and bell modified-flag)
-      (message "ID properties created in file \"%s\"" file)
-      (sit-for 2))))
-
-(defun org-caldav-generate-ics ()
-  "Generate ICS file from `org-caldav-files'.
-Returns buffer containing the ICS file."
-  (let ((icalendar-file
-	 (if (featurep 'ox-icalendar)
-	     'org-icalendar-combined-agenda-file
-	   'org-combined-agenda-icalendar-file))
-	(orgfiles (org-caldav-get-org-files-for-sync))
-	(org-export-select-tags org-caldav-select-tags)
-	(org-icalendar-exclude-tags org-caldav-exclude-tags)
-        ;; We create UIDs ourselves and do not rely on ox-icalendar.el
-	(org-icalendar-store-UID nil)
-	;; Does not work yet
-	(org-icalendar-include-bbdb-anniversaries nil)
-	(icalendar-uid-format "orgsexp-%h")
-	(org-icalendar-date-time-format
-	 (cond
-	  ((and org-icalendar-timezone
-		(string= org-icalendar-timezone "UTC"))
-	   ":%Y%m%dT%H%M%SZ")
-	  (org-icalendar-timezone
-	   ";TZID=%Z:%Y%m%dT%H%M%S")
-	  (t
-	   ":%Y%m%dT%H%M%S"))))
-    (dolist (orgfile orgfiles)
-      (with-current-buffer (org-get-agenda-file-buffer orgfile)
-        (org-caldav-create-uid orgfile t)))
-    ;; check scheduled and deadline for having both time or none (vtodo)
-    (org-caldav-prepare-scheduled-deadline-timestamps orgfiles)
-    (set icalendar-file (make-temp-file "org-caldav-"))
-    (org-caldav-debug-print 1 (format "Generating ICS file %s."
-				      (symbol-value icalendar-file)))
-    ;; compat: use org-export-before-parsing-functions after org >=9.6
-    (org-caldav--suppress-obsolete-warning org-export-before-parsing-hook
-      (let ((org-export-before-parsing-hook
-	     (append org-export-before-parsing-hook
-                     (when (or org-caldav-skip-conditions
-                               org-caldav-days-in-past)
-                       '(org-caldav-skip-function))
-                     (when org-caldav-todo-deadline-schedule-warning-days
-                       '(org-caldav-scheduled-from-deadline)))))
-        ;; Export events to one single ICS file.
-        (apply 'org-icalendar--combine-files orgfiles)))
-    (find-file-noselect (symbol-value icalendar-file))))
 
 (defun org-caldav-get-uid ()
   "Get UID for event in current buffer."
@@ -1793,18 +1622,6 @@ is no UID to rewrite. Returns the UID."
 	(insert uid "\n"))
       uid)))
 
-(defun org-caldav-debug-print (level &rest objects)
-  "Print OBJECTS into debug buffer with debug level LEVEL.
-Do nothing if LEVEL is larger than `org-caldav-debug-level'."
-  (unless (or (null org-caldav-debug-level)
-	      (> level org-caldav-debug-level))
-    (with-current-buffer (get-buffer-create org-caldav-debug-buffer)
-      (dolist (cur objects)
-	(if (stringp cur)
-	    (insert cur)
-	  (prin1 cur (current-buffer)))
-	(insert "\n")))))
-
 (defun org-caldav-buffer-narrowed-p ()
   "Return non-nil if current buffer is narrowed."
   (> (buffer-size) (- (point-max)
@@ -1824,34 +1641,6 @@ Sets the block's tags, and return its MD5."
   (md5 (buffer-substring-no-properties
 	(org-entry-beginning-position)
 	(org-entry-end-position))))
-
-(defun org-caldav-scheduled-from-deadline (backend)
-  "Create a scheduled entry from deadline."
-  (when (eq backend 'icalendar)
-    (org-map-entries
-     (lambda ()
-       (let* ((sched (org-element-property :scheduled (org-element-at-point)))
-              (ts (org-element-property :deadline (org-element-at-point)))
-              (raw (org-element-property :raw-value ts))
-              (wu (org-element-property :warning-unit ts))
-              (wv (org-element-property :warning-value ts))
-              (dip (when org-caldav-days-in-past (* (abs org-caldav-days-in-past) -1)))
-              (stamp (org-entry-get nil "DEADLINE")))
-         ;; skip if too old:
-         (unless (and dip stamp (> dip (org-time-stamp-to-now stamp)))
-         (when (and ts (not sched))
-           (org--deadline-or-schedule nil 'scheduled raw)
-           (search-forward "SCHEDULED: ")
-           (forward-char)
-           (if wv
-               (progn
-                 (cond ((eq wu 'week) (setq wu 'day wv (* wv 7)))
-                       ((eq wu 'hour) (setq wu 'minute wv (* wv 60))))
-                 (org-timestamp-change (* wv -1) wu))
-               (org-timestamp-change (* org-deadline-warning-days -1) 'day))))
-         (org-back-to-heading)
-         (org-caldav-debug-print 2 (format "scheduled: %s" (org-entry-get nil
-                                                                 "SCHEDULED" t))))))))
 
 (defun org-caldav-set-org-tags (tags)
   "Set tags to the headline, where tags is a coma-seperated
