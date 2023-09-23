@@ -42,6 +42,7 @@
 (require 'button)
 
 (require 'org-caldav-core)
+(require 'org-caldav-eventdb)
 (require 'org-caldav-ical2org)
 (require 'org-caldav-ox-icalendar)
 
@@ -359,12 +360,6 @@ the unit tests to fail otherwise."
   "The plist from org-caldav-calendars, which holds the last
 synced calendar. Used to properly resume an interupted attempt.")
 
-(defvar org-caldav-event-list nil
-  "The event list database.
-This is an alist with elements
-  (uid md5 etag sequence status).
-It will be saved to disk between sessions.")
-
 (defvar org-caldav-sync-result nil
   "Result from last synchronization.
 Contains an alist with entries
@@ -384,16 +379,6 @@ and  action = {org->cal, cal->org, error:org->cal, error:cal->org}.")
 
 (defvar org-caldav-previous-files nil
   "Files that were synced during previous run.")
-
-(defsubst org-caldav-add-event (uid md5 etag sequence status)
-  "Add event with UID, MD5, ETAG and STATUS."
-  (setq org-caldav-event-list
-	(append org-caldav-event-list
-		(list (list uid md5 etag sequence status)))))
-
-(defsubst org-caldav-search-event (uid)
-  "Return entry with UID from even list."
-  (assoc uid org-caldav-event-list))
 
 (defsubst org-caldav-event-md5 (event)
   "Get MD5 from EVENT."
@@ -429,15 +414,6 @@ and  action = {org->cal, cal->org, error:org->cal, error:cal->org}.")
 
 (defsubst org-caldav-use-oauth2 ()
   (symbolp org-caldav-url))
-
-(defun org-caldav-filter-events (status)
-  "Return list of events with STATUS."
-  (delq nil
-	(mapcar
-	 (lambda (event)
-	   (when (eq (car (last event)) status)
-	     event))
-	 org-caldav-event-list)))
 
 ;; Since not being able to access an URL via DAV is the most reported
 ;; error, let's be very verbose about checking for DAV availability.
