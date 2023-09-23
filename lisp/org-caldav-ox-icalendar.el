@@ -143,6 +143,45 @@ Returns buffer containing the ICS file."
         (apply 'org-icalendar--combine-files orgfiles)))
     (find-file-noselect (symbol-value icalendar-file))))
 
+(defun org-caldav-rewrite-uid-in-event ()
+  "Rewrite UID in current buffer.
+This will strip prefixes like 'DL' or 'TS' the Org exporter puts
+in the UID and also remove whitespaces. Throws an error if there
+is no UID to rewrite. Returns the UID."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((uid (org-caldav-get-uid)))
+      (when uid
+	(goto-char (point-min))
+	(re-search-forward "^UID:")
+	(let ((pos (point)))
+	  (while (progn (forward-line)
+			(looking-at " \\(.+\\)\\s-*$")))
+	  (delete-region pos (point)))
+	(insert uid "\n"))
+      uid)))
+
+(defun org-caldav-patch-ics--uid (buf)
+  "TODO"
+  (with-current-buffer buf
+    (goto-char (point-min))
+    (while (org-caldav-narrow-next-event)
+      (org-caldav-rewrite-uid-in-event))))
+
+(defun org-caldav-patch-ics--rest (icsbuf)
+  "TODO"
+  nil)
+
+(defun org-caldav-patch-ics--all (icsbuf)
+  "TODO"
+  (org-caldav-patch-ics--uid icsbuf)
+  (org-caldav-patch-ics--rest icsbuf))
+
+(defun org-caldav-export-ics ()
+  "TODO"
+  (interactive)
+  (org-caldav-patch-ics-all (org-caldav-generate-ics)))
+
 (defun org-caldav-scheduled-from-deadline (backend)
   "Create a scheduled entry from deadline."
   (when (eq backend 'icalendar)

@@ -751,7 +751,9 @@ Are you really sure? ")))
   (with-current-buffer buf
     (goto-char (point-min))
     (while (org-caldav-narrow-next-event)
-      (let* ((uid (org-caldav-rewrite-uid-in-event))
+      (let* ((uid (save-excursion
+                    (goto-char (point-min))
+                    (org-caldav-get-uid)))
 	     (md5 (unless (string-match "^orgsexp-" uid)
 		    (org-caldav-generate-md5-for-org-entry uid)))
 	     (event (org-caldav-search-event uid)))
@@ -935,7 +937,15 @@ If RESUME is non-nil, try to resume."
 	(when (org-caldav-sync-do-org->cal)
 	  ;; Export Org to icalendar format
 	  (setq org-caldav-ics-buffer (org-caldav-generate-ics))
-	  (org-caldav-update-eventdb-from-org org-caldav-ics-buffer))
+          ;; NOTE For back-compatibility we patch the UIDs, then
+          ;; update the eventdb, then patch the rest of the ICS. It
+          ;; would be better to generate the complete patched ics
+          ;; separately from updating the eventdb, but we will need to
+          ;; provide a migration path before that to avoid triggering
+          ;; an update on every event.
+          (org-caldav-patch-ics--uid org-caldav-ics-buffer)
+	  (org-caldav-update-eventdb-from-org org-caldav-ics-buffer)
+          (org-caldav-patch-ics--rest org-caldav-ics-buffer))
 	;; Update events for the cal->org direction
 	(when (org-caldav-sync-do-cal->org)
 	  (org-caldav-update-eventdb-from-cal)))
@@ -1533,21 +1543,6 @@ Returns nil if not and (sec min hour) if it has."
   (let ((ti (parse-time-string timestamp)))
     (or (nth 0 ti) (nth 1 ti) (nth 2 ti))))
 
-(defun org-caldav-get-uid ()
-  "Get UID for event in current buffer."
-  (if (re-search-forward "^UID:\\s-*\\(.+\\)\\s-*$" nil t)
-      (let ((case-fold-search nil)
-            (uid (match-string 1)))
-	(while (progn (forward-line)
-		      (looking-at " \\(.+\\)\\s-*$"))
-	  (setq uid (concat uid (match-string 1))))
-	(while (string-match "\\s-+" uid)
-	  (setq uid (replace-match "" nil nil uid)))
-        (when (string-match "^\\(\\(DL\\|SC\\|TS\\|TODO\\)[0-9]*-\\)" uid)
-	  (setq uid (replace-match "" nil nil uid)))
-	uid)
-    (error "No UID could be found for current event.")))
-
 (defun org-caldav-narrow-next-event ()
   "Narrow next event in the current buffer.
 If buffer is currently not narrowed, narrow to the first one.
@@ -1579,24 +1574,6 @@ Returns nil if there are no more events."
                       (re-search-forward "END:V[EVENT|TODO]")
 		      (forward-line 1)
 		      (point))))
-
-(defun org-caldav-rewrite-uid-in-event ()
-  "Rewrite UID in current buffer.
-This will strip prefixes like 'DL' or 'TS' the Org exporter puts
-in the UID and also remove whitespaces. Throws an error if there
-is no UID to rewrite. Returns the UID."
-  (save-excursion
-    (goto-char (point-min))
-    (let ((uid (org-caldav-get-uid)))
-      (when uid
-	(goto-char (point-min))
-	(re-search-forward "^UID:")
-	(let ((pos (point)))
-	  (while (progn (forward-line)
-			(looking-at " \\(.+\\)\\s-*$")))
-	  (delete-region pos (point)))
-	(insert uid "\n"))
-      uid)))
 
 (defun org-caldav-buffer-narrowed-p ()
   "Return non-nil if current buffer is narrowed."

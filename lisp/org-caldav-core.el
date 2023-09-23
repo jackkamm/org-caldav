@@ -21,6 +21,7 @@
 ;;; Commentary:
 
 ;; TODO
+;; TODO Rename this to org-caldav-utils?
 
 ;;; Code:
 
@@ -84,6 +85,21 @@ This adds the inbox if necessary."
 		       (org-caldav-sync-do-org->cal)
 		       (not (member inbox org-caldav-files)))
 	      (list inbox)))))
+
+(defun org-caldav-get-uid ()
+  "Get UID for event in current buffer."
+  (if (re-search-forward "^UID:\\s-*\\(.+\\)\\s-*$" nil t)
+      (let ((case-fold-search nil)
+            (uid (match-string 1)))
+	(while (progn (forward-line)
+		      (looking-at " \\(.+\\)\\s-*$"))
+	  (setq uid (concat uid (match-string 1))))
+	(while (string-match "\\s-+" uid)
+	  (setq uid (replace-match "" nil nil uid)))
+        (when (string-match "^\\(\\(DL\\|SC\\|TS\\|TODO\\)[0-9]*-\\)" uid)
+	  (setq uid (replace-match "" nil nil uid)))
+	uid)
+    (error "No UID could be found for current event.")))
 
 (defun org-caldav-debug-print (level &rest objects)
   "Print OBJECTS into debug buffer with debug level LEVEL.
