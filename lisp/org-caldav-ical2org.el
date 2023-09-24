@@ -25,6 +25,8 @@
 ;;; Commentary:
 
 ;; TODO
+;; This is meant to give an elisp alternative to ical2org.awk, e.g. see
+;; https://orgmode.org/worg/org-tutorials/org-google-sync.html
 
 ;;; Code:
 

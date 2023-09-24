@@ -1,4 +1,4 @@
-;;; org-caldav-ox-icalendar.el --- Export Org to iCalendar  -*- lexical-binding: t; -*-
+;;; org-caldav-org2ical.el --- Export Org to iCalendar  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2012-2017 Free Software Foundation, Inc.
 ;; Copyright (C) 2018-2023 David Engster
@@ -442,5 +442,5 @@ Returns buffer containing the ICS file."
          (org-caldav-debug-print 2 (format "scheduled: %s" (org-entry-get nil
                                                                  "SCHEDULED" t))))))))
 
-(provide 'org-caldav-ox-icalendar)
-;;; org-caldav-ox-icalendar.el ends here
+(provide 'org-caldav-org2ical)
+;;; org-caldav-org2ical.el ends here

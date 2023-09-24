@@ -43,7 +43,7 @@
 
 (require 'org-caldav-utils)
 (require 'org-caldav-ical2org)
-(require 'org-caldav-ox-icalendar)
+(require 'org-caldav-org2ical)
 
 (declare-function oauth2-url-retrieve-synchronously "ext:oauth2" (&rest args))
 (declare-function oauth2-auth-and-store "ext:oauth2" (&rest args))
