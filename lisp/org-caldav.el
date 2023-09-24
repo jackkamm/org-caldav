@@ -41,7 +41,7 @@
 (require 'cl-lib)
 (require 'button)
 
-(require 'org-caldav-core)
+(require 'org-caldav-utils)
 (require 'org-caldav-eventdb)
 (require 'org-caldav-ical2org)
 (require 'org-caldav-ox-icalendar)

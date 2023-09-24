@@ -1,4 +1,4 @@
-;;; org-caldav-core.el --- Core functions for org-caldav  -*- lexical-binding: t; -*-
+;;; org-caldav-utils.el --- Core functions for org-caldav  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2023  Jack Kamm
 
@@ -97,5 +97,5 @@ Returns nil if there are no more events."
 			(point)))
     t))
 
-(provide 'org-caldav-core)
-;;; org-caldav-core.el ends here
+(provide 'org-caldav-utils)
+;;; org-caldav-utils.el ends here

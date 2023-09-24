@@ -28,7 +28,7 @@
 
 ;;; Code:
 
-(require 'org-caldav-core)
+(require 'org-caldav-utils)
 
 (defun org-caldav-insert-org-event-or-todo (eventdata-alist)
   "Insert org block from given event data at current position.

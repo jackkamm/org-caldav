@@ -29,7 +29,7 @@
 ;;; Code:
 
 (require 'ox-icalendar)
-(require 'org-caldav-core)
+(require 'org-caldav-utils)
 
 (defcustom org-caldav-select-tags nil
   "List of tags to filter the synced tasks.
