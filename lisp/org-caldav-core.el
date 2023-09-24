@@ -67,6 +67,41 @@ This might be useful for OpenTasks users, to prevent the app from
 showing tasks which have a deadline years in the future."
   :type 'boolean)
 
+(defcustom org-caldav-todo-priority '((0 nil) (1 "A") (5 "B") (9 "C"))
+  "Mapping between iCalendar and Org TODO priority levels.
+
+The iCalendar priority is an integer 1-9, with lower number
+having higher priority, and 0 equal to unspecified priority. The
+default Org priorities are A-C, but this can be changed with
+`org-priority-highest' and `org-priority-lowest'. If you change
+the default Org priority, you should also update this
+variable (`org-caldav-todo-priority').
+
+The default mapping is: 0 is no priority, 1-4 is #A, 5-8 is #B,
+and 9 is #C.
+
+TODO: Store the priority in a property and sync it."
+  :type 'list)
+
+(defcustom org-caldav-todo-percent-states '((0 "TODO") (100 "DONE"))
+  "Mapping between `org-todo-keywords' & iCal VTODO's percent-complete.
+
+iCalendar's percent-complete is a positive integer between 0 and
+100. The default value for `org-caldav-todo-percent-states' maps
+these to `org-todo-keywords' as follows: 0-99 is TODO, and 100 is
+DONE.
+
+The following example would instead map 0 to TODO, 1 to NEXT,
+2-99 to PROG, and 100 to DONE:
+
+  (setq org-caldav-todo-percent-states
+        '((0 \"TODO\") (1 \"NEXT\") (2 \"PROG\") (100 \"DONE\")))
+
+Note: You should check that the keywords in
+`org-caldav-todo-percent-states' are also valid keywords in
+`org-todo-keywords'."
+  :type 'list)
+
 (defmacro org-caldav--suppress-obsolete-warning (var body)
   "Macro for compatibility.
 To be removed when emacs dependency reaches >=27.1."
@@ -75,6 +110,86 @@ To be removed when emacs dependency reaches >=27.1."
       `(with-suppressed-warnings ((obsolete ,var))
          ,body))
   `(with-no-warnings ,body))
+
+(defsubst org-caldav-event-md5 (event)
+  "Get MD5 from EVENT."
+  (nth 1 event))
+
+(defsubst org-caldav-event-etag (event)
+  "Get etag from EVENT."
+  (nth 2 event))
+
+(defsubst org-caldav-event-sequence (event)
+  "Get sequence number from EVENT."
+  (nth 3 event))
+
+(defsubst org-caldav-event-status (event)
+  "Get status from EVENT."
+  (nth 4 event))
+
+(defsubst org-caldav-event-set-status (event status)
+  "Set status from EVENT to STATUS."
+  (setcar (last event) status))
+
+(defsubst org-caldav-event-set-etag (event etag)
+  "Set etag from EVENT to ETAG."
+  (setcar (nthcdr 2 event) etag))
+
+(defsubst org-caldav-event-set-md5 (event md5sum)
+  "Set md5 from EVENT to MD5SUM."
+  (setcar (cdr event) md5sum))
+
+(defsubst org-caldav-event-set-sequence (event seqnum)
+  "Set sequence number from EVENT to SEQNUM."
+  (setcar (nthcdr 3 event) seqnum))
+
+(defsubst org-caldav-use-oauth2 ()
+  (symbolp org-caldav-url))
+
+(defun org-caldav-get-event (uid &optional with-headers)
+  "Get event with UID from calendar.
+Function returns a buffer containing the event, or nil if there's
+no such event.
+If WITH-HEADERS is non-nil, do not delete headers.
+If retrieve fails, do `org-caldav-retry-attempts' retries."
+  (org-caldav-debug-print 1 (format "Getting event UID %s." uid))
+  (let ((counter 0)
+	eventbuffer errormessage)
+    (while (and (not eventbuffer)
+		(< counter org-caldav-retry-attempts))
+      (with-current-buffer
+	  (org-caldav-url-retrieve-synchronously
+	   (concat (org-caldav-events-url) (url-hexify-string uid) org-caldav-uuid-extension))
+	(goto-char (point-min))
+	(if (looking-at "HTTP.*2[0-9][0-9]")
+	    (setq eventbuffer (current-buffer))
+	  ;; There was an error retrieving the event
+	  (setq errormessage (buffer-substring (point-min) (point-at-eol)))
+	  (setq counter (1+ counter))
+	  (org-caldav-debug-print
+	   1 (format "(Try %d) Error when trying to retrieve UID %s: %s"
+		     counter uid errormessage)))))
+    (unless eventbuffer
+      ;; Give up
+      (error "Failed to retrieve UID %s after %d tries with error %s"
+	     uid org-caldav-retry-attempts errormessage))
+    (with-current-buffer eventbuffer
+      (unless (search-forward "BEGIN:VCALENDAR" nil t)
+	(error "Failed to find calendar entry for UID %s (see buffer %s)"
+	       uid (buffer-name eventbuffer)))
+      (beginning-of-line)
+      (unless with-headers
+	(delete-region (point-min) (point)))
+      (save-excursion
+	(while (re-search-forward "\^M" nil t)
+	  (replace-match "")))
+      ;; Join lines because of bug in icalendar parsing.
+      (save-excursion
+	(while (re-search-forward "^ " nil t)
+	  (delete-char -2)))
+      (org-caldav-debug-print 2 (format "Content of event UID %s: " uid)
+			      (buffer-string)))
+    eventbuffer))
 
 (defun org-caldav-get-org-files-for-sync ()
   "Return list of all org files for syncing.
@@ -112,6 +227,26 @@ Do nothing if LEVEL is larger than `org-caldav-debug-level'."
 	    (insert cur)
 	  (prin1 cur (current-buffer)))
 	(insert "\n")))))
+
+(defun org-caldav-narrow-next-event ()
+  "Narrow next event in the current buffer.
+If buffer is currently not narrowed, narrow to the first one.
+Returns nil if there are no more events."
+  (if (not (org-caldav-buffer-narrowed-p))
+      (goto-char (point-min))
+    (goto-char (point-max))
+    (widen))
+  (if (null (re-search-forward "BEGIN:V[EVENT|TODO]" nil t))
+      (progn
+	;; No more events.
+	(widen)	nil)
+    (beginning-of-line)
+    (narrow-to-region (point)
+		      (save-excursion
+                        (re-search-forward "END:V[EVENT|TODO]")
+			(forward-line 1)
+			(point)))
+    t))
 
 (provide 'org-caldav-core)
 ;;; org-caldav-core.el ends here

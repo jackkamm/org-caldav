@@ -24,12 +24,157 @@
 
 ;;; Commentary:
 
-;; TODO
+;; TODO Rename this to org-caldav-org2ics.el
 
 ;;; Code:
 
 (require 'ox-icalendar)
 (require 'org-caldav-core)
+
+(defun org-caldav-convert-buffer-to-crlf ()
+  "Converts local buffer to the dos format using crlf at the end
+  of the line.  Some ical validators fail otherwise."
+  (save-excursion
+    (goto-char (point-min))
+    (while (not (= (point) (point-max)))
+      (goto-char (- (point-at-eol) 1))
+      (unless (string= (thing-at-point 'char) "\^M")
+        (forward-char)
+        (insert "\^M"))
+      (forward-line))))
+
+(defun org-caldav-cleanup-ics-description ()
+  "Cleanup description for event in current buffer.
+This removes an initial timestamp or range if it wasn't removed
+by ox-icalendar."
+  (save-excursion
+    (goto-char (point-min))
+    (when (re-search-forward
+           ;; Can't use org-tsr-regexp because -- is converted to
+           ;; unicode emdash –
+           (concat "^DESCRIPTION:\\(\\s-*"
+                   org-ts-regexp
+                   "\\(–"
+                   org-ts-regexp
+                   "\\)?\\(\\\\n\\\\n\\)?\\)")
+            nil t)
+      (replace-match "" nil nil nil 1))))
+
+(defun org-caldav-maybe-fix-timezone ()
+  "Fix the timezone if it is all uppercase.
+This is a bug in older Org versions."
+  (unless (null org-icalendar-timezone)
+    (save-excursion
+      (goto-char (point-min))
+      (while (search-forward (upcase org-icalendar-timezone) nil t)
+        (replace-match org-icalendar-timezone t)))))
+
+(defun org-caldav-fix-todo-priority ()
+  "icalendar exports default priority with ical export.  We want
+  a priority of 0 if is not set."
+  (save-excursion
+    (goto-char (point-min))
+    (when (search-forward "BEGIN:VTODO" nil t)
+      (search-forward "PRIORITY:")
+      (unless (eq (thing-at-point 'number) 0)
+        ;; NOTE: Deletion up to eol-1 assumes the line ends with ^M
+        (delete-region (point) (- (point-at-eol) 1))
+        (insert (number-to-string
+                  (save-excursion
+                    (goto-char (point-min))
+                    (org-id-goto (org-caldav-get-uid))
+                    (org-narrow-to-subtree)
+                    (let ((nprio (if (re-search-forward org-priority-regexp nil t)
+                                     (let* ((prio (org-entry-get nil "PRIORITY"))
+                                            (r 0))
+                                       (dolist (pri org-caldav-todo-priority r)
+                                         (when (string= (car (cdr pri)) prio)
+                                           (setq r (car pri))))
+                                       r)
+                                   0)))
+                      (widen)
+                      nprio))))))))
+
+(defun org-caldav-fix-todo-status-percent-state ()
+  "icalendar exports only sets the STATUS but not the
+PERCENT-COMPLETE.  This works great if you have only TODO and
+DONE, but I like to use other states like STARTED or NEXT to
+indicate the process.  This fixes the ical values for that.
+
+TODO: save percent-complete also as a property in org"
+  (save-excursion
+    (goto-char (point-min))
+    (when (search-forward "BEGIN:VTODO" nil t)
+      (if (search-forward "STATUS:" nil t)
+        (delete-region (point-at-bol) (+ 1 (point-at-eol)))
+        (progn (search-forward "END:VTODO")
+          (goto-char (point-at-bol))))
+
+
+      (let* ((state (save-excursion
+                      (goto-char (point-min))
+                      (org-id-goto (org-caldav-get-uid))
+                      (substring-no-properties (org-get-todo-state))))
+             (r nil)
+             (percent (dolist (p org-caldav-todo-percent-states r)
+                        (when (string= state (car (cdr p)))
+                          (setq r (car p)))))
+             (status (if r
+                         (cond ((= percent 0) "NEEDS-ACTION")
+                               ((= percent 100) "COMPLETED")
+                               (t "IN-PROCESS"))
+                       (error "Error setting percent state: '%s' not present in org-caldav-todo-percent-states" state)))
+             (completed (save-excursion
+                          (goto-char (point-min))
+                          (org-id-goto (org-caldav-get-uid))
+                          (org-element-property :closed (org-element-at-point)))))
+        (insert "PERCENT-COMPLETE:" (number-to-string percent) "\n")
+        (insert "STATUS:" status "\n")
+        ;; if closed missing but in DONE state:
+        (when (and (= percent 100) (not completed))
+          (setq completed (save-excursion
+                            (goto-char (point-min))
+                            (org-id-goto (org-caldav-get-uid))
+                            (org-add-planning-info 'closed (org-current-effective-time))
+                            (org-element-property :closed (org-element-at-point)))))
+        (when completed
+          (insert (org-icalendar-convert-timestamp
+                    completed "COMPLETED") "\n"))))))
+
+(defun org-caldav-fix-categories ()
+  "Nextcloud creates an empty category if this is set without any
+  entry.  We fix this by removing the CATEGORIES entry."
+  (save-excursion
+    (goto-char (point-min))
+    (when (and (search-forward "CATEGORIES:" nil t)
+            (not (thing-at-point 'word)))
+      (delete-region (point-at-bol) (+ (point-at-eol) 1)))))
+
+(defun org-caldav-fix-todo-dtstart ()
+  "ox-icalendar includes the actual time as DTSTART into the
+vtodo.  For nextcloud this behaviour is undesired, because
+dtstart is used for the beginning of the task, which is in the
+SCHEDULED of the org entry.  Lets see if the org entry has a
+scheduled time and remove dtstart if it doesn't.
+
+If `org-caldav-todo-deadline-schedule-warning-days' is set, this will
+also look if there is a deadline."
+  (save-excursion
+    (goto-char (point-min))
+    (when (search-forward "BEGIN:VTODO" nil t)
+      (when
+        (search-forward "DTSTART" nil t)
+        (unless
+          (save-excursion
+            (goto-char (point-min))
+            (org-id-goto (org-caldav-get-uid))
+            (if (and org-caldav-todo-deadline-schedule-warning-days
+                     ;; has deadline warning days set too:
+                     (string-match "-\\([0-9]+\\)\\([hdwmy]\\)\\(\\'\\|>\\| \\)"
+                                   (or (org-entry-get nil "DEADLINE" nil) "")))
+                (or (org-get-scheduled-time nil) (org-get-deadline-time nil))
+              (org-get-scheduled-time nil)))
+          (delete-region (point-at-bol) (+ 1 (point-at-eol))))))))
 
 (defun org-caldav-skip-function (backend)
   (org-caldav-debug-print 2 "Skipping over excluded entries")
@@ -144,7 +289,7 @@ Returns buffer containing the ICS file."
     (find-file-noselect (symbol-value icalendar-file))))
 
 (defun org-caldav-rewrite-uid-in-event ()
-  "Rewrite UID in current buffer.
+  "Rewrite UID in narrowed vevent buffer.
 This will strip prefixes like 'DL' or 'TS' the Org exporter puts
 in the UID and also remove whitespaces. Throws an error if there
 is no UID to rewrite. Returns the UID."
@@ -162,25 +307,41 @@ is no UID to rewrite. Returns the UID."
       uid)))
 
 (defun org-caldav-patch-ics--uid (buf)
-  "TODO"
+  "Rewrite all UIDs in ICS buffer BUF.
+This will strip prefixes like 'DL' or 'TS' the Org exporter puts
+in the UID and also remove whitespaces."
   (with-current-buffer buf
     (goto-char (point-min))
     (while (org-caldav-narrow-next-event)
       (org-caldav-rewrite-uid-in-event))))
 
-(defun org-caldav-patch-ics--rest (icsbuf)
-  "TODO"
-  nil)
+(defun org-caldav-patch-ics--rest (buf)
+  "Apply fixes to exported ics from ox-icalendar, aside from uid fixes.
+The uid is patched separately in `org-caldav-patch-ics--uid',
+because it needs to happen before the md5sum for
+back-compatibility reasons."
+  (with-current-buffer buf
+    (org-caldav-convert-buffer-to-crlf)
+    (goto-char (point-min))
+    (while (org-caldav-narrow-next-event)
+      (org-caldav-cleanup-ics-description)
+      (org-caldav-maybe-fix-timezone)
+      (org-caldav-fix-todo-priority)
+      (org-caldav-fix-todo-status-percent-state)
+      (org-caldav-fix-categories)
+      (org-caldav-fix-todo-dtstart))))
 
 (defun org-caldav-patch-ics--all (icsbuf)
-  "TODO"
+  "Apply fixes to exported ics from ox-icalendar."
   (org-caldav-patch-ics--uid icsbuf)
-  (org-caldav-patch-ics--rest icsbuf))
+  (org-caldav-patch-ics--rest icsbuf)
+  icsbuf)
 
 (defun org-caldav-export-ics ()
-  "TODO"
+  "Generate ICS file from `org-caldav-files'.
+Returns buffer containing the ICS file."
   (interactive)
-  (org-caldav-patch-ics-all (org-caldav-generate-ics)))
+  (org-caldav-patch-ics--all (org-caldav-generate-ics)))
 
 (defun org-caldav-scheduled-from-deadline (backend)
   "Create a scheduled entry from deadline."
