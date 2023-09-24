@@ -31,6 +31,77 @@
 (require 'ox-icalendar)
 (require 'org-caldav-core)
 
+(defcustom org-caldav-select-tags nil
+  "List of tags to filter the synced tasks.
+If any such tag is found in a buffer, all items that do not carry
+one of these tags will not be exported."
+  :type '(repeat string))
+
+(defcustom org-caldav-exclude-tags nil
+  "List of tags to exclude from the synced tasks.
+All items that carry one of these tags will not be exported."
+  :type '(repeat string))
+
+(defcustom org-caldav-days-in-past nil
+  "Number of days before today to skip in the exported calendar.
+This makes it very easy to keep the remote calendar clean.
+
+nil means include all entries (default)
+any number set will cut the dates older than N days in the past."
+  :type 'integer)
+
+(defcustom org-caldav-skip-conditions nil
+  "Conditions for skipping entries during icalendar export.
+This must be a list of conditions, which are described in the
+doc-string of `org-agenda-skip-if'.  Any entry that matches will
+not be exported.  Note that the normal `org-agenda-skip-function'
+has no effect on the icalendar exporter."
+  :type 'list)
+
+(defcustom org-caldav-todo-deadline-schedule-warning-days nil
+  "Whether to auto-create SCHEDULED timestamp from DEADLINE.
+
+When set to `t', on sync any TODO item with a DEADLINE timestamp
+will have a SCHEDULED timestamp added if it doesn't already have
+one.
+
+This uses the warning string like DEADLINE: <2017-07-05 Wed -3d>
+to a SCHEDULED <2017-07-02 Sun>.  If the warning days (here -3d)
+is not given it is taken from `org-deadline-warning-days'.
+
+This might be useful for OpenTasks users, to prevent the app from
+showing tasks which have a deadline years in the future."
+  :type 'boolean)
+
+(defcustom org-caldav-todo-percent-states '((0 "TODO") (100 "DONE"))
+  "Mapping between `org-todo-keywords' & iCal VTODO's percent-complete.
+
+iCalendar's percent-complete is a positive integer between 0 and
+100. The default value for `org-caldav-todo-percent-states' maps
+these to `org-todo-keywords' as follows: 0-99 is TODO, and 100 is
+DONE.
+
+The following example would instead map 0 to TODO, 1 to NEXT,
+2-99 to PROG, and 100 to DONE:
+
+  (setq org-caldav-todo-percent-states
+        '((0 \"TODO\") (1 \"NEXT\") (2 \"PROG\") (100 \"DONE\")))
+
+Note: You should check that the keywords in
+`org-caldav-todo-percent-states' are also valid keywords in
+`org-todo-keywords'."
+  :type 'list)
+
+(defun org-caldav-get-org-files-for-sync ()
+  "Return list of all org files for syncing.
+This adds the inbox if necessary."
+  (let ((inbox (org-caldav-inbox-file org-caldav-inbox)))
+    (append org-caldav-files
+	    (when (and inbox
+		       (org-caldav-sync-do-org->cal)
+		       (not (member inbox org-caldav-files)))
+	      (list inbox)))))
+
 (defun org-caldav-convert-buffer-to-crlf ()
   "Converts local buffer to the dos format using crlf at the end
   of the line.  Some ical validators fail otherwise."

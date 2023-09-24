@@ -345,6 +345,41 @@ and  action = {org->cal, cal->org, error:org->cal, error:cal->org}.")
 (defvar org-caldav-previous-files nil
   "Files that were synced during previous run.")
 
+(defsubst org-caldav-event-md5 (event)
+  "Get MD5 from EVENT."
+  (nth 1 event))
+
+(defsubst org-caldav-event-etag (event)
+  "Get etag from EVENT."
+  (nth 2 event))
+
+(defsubst org-caldav-event-sequence (event)
+  "Get sequence number from EVENT."
+  (nth 3 event))
+
+(defsubst org-caldav-event-status (event)
+  "Get status from EVENT."
+  (nth 4 event))
+
+(defsubst org-caldav-event-set-status (event status)
+  "Set status from EVENT to STATUS."
+  (setcar (last event) status))
+
+(defsubst org-caldav-event-set-etag (event etag)
+  "Set etag from EVENT to ETAG."
+  (setcar (nthcdr 2 event) etag))
+
+(defsubst org-caldav-event-set-md5 (event md5sum)
+  "Set md5 from EVENT to MD5SUM."
+  (setcar (cdr event) md5sum))
+
+(defsubst org-caldav-event-set-sequence (event seqnum)
+  "Set sequence number from EVENT to SEQNUM."
+  (setcar (nthcdr 3 event) seqnum))
+
+(defsubst org-caldav-use-oauth2 ()
+  (symbolp org-caldav-url))
+
 ;; Since not being able to access an URL via DAV is the most reported
 ;; error, let's be very verbose about checking for DAV availability.
 (defun org-caldav-check-dav (url)
@@ -511,6 +546,51 @@ Also sets `org-caldav-empty-calendar' if calendar is empty."
       (when (and url etag)
 	(push (cons (url-unhex-string url) etag) files))))
     files))
+
+(defun org-caldav-get-event (uid &optional with-headers)
+  "Get event with UID from calendar.
+Function returns a buffer containing the event, or nil if there's
+no such event.
+If WITH-HEADERS is non-nil, do not delete headers.
+If retrieve fails, do `org-caldav-retry-attempts' retries."
+  (org-caldav-debug-print 1 (format "Getting event UID %s." uid))
+  (let ((counter 0)
+	eventbuffer errormessage)
+    (while (and (not eventbuffer)
+		(< counter org-caldav-retry-attempts))
+      (with-current-buffer
+	  (org-caldav-url-retrieve-synchronously
+	   (concat (org-caldav-events-url) (url-hexify-string uid) org-caldav-uuid-extension))
+	(goto-char (point-min))
+	(if (looking-at "HTTP.*2[0-9][0-9]")
+	    (setq eventbuffer (current-buffer))
+	  ;; There was an error retrieving the event
+	  (setq errormessage (buffer-substring (point-min) (point-at-eol)))
+	  (setq counter (1+ counter))
+	  (org-caldav-debug-print
+	   1 (format "(Try %d) Error when trying to retrieve UID %s: %s"
+		     counter uid errormessage)))))
+    (unless eventbuffer
+      ;; Give up
+      (error "Failed to retrieve UID %s after %d tries with error %s"
+	     uid org-caldav-retry-attempts errormessage))
+    (with-current-buffer eventbuffer
+      (unless (search-forward "BEGIN:VCALENDAR" nil t)
+	(error "Failed to find calendar entry for UID %s (see buffer %s)"
+	       uid (buffer-name eventbuffer)))
+      (beginning-of-line)
+      (unless with-headers
+	(delete-region (point-min) (point)))
+      (save-excursion
+	(while (re-search-forward "\^M" nil t)
+	  (replace-match "")))
+      ;; Join lines because of bug in icalendar parsing.
+      (save-excursion
+	(while (re-search-forward "^ " nil t)
+	  (delete-char -2)))
+      (org-caldav-debug-print 2 (format "Content of event UID %s: " uid)
+			      (buffer-string)))
+    eventbuffer))
 
 (defun org-caldav-get-event-etag-list ()
   "Return list of events with associated etag from remote calendar.

@@ -28,6 +28,8 @@
 
 ;;; Code:
 
+(require 'org-caldav-core)
+
 (defun org-caldav-insert-org-event-or-todo (eventdata-alist)
   "Insert org block from given event data at current position.
 Elements of EVENTDATA-ALIST are passed on as arguments to
@@ -230,8 +232,9 @@ which can be fed into `org-caldav-insert-org-event-or-todo'."
 ;; org file, or adds to an arbitrary file (rather than adding contents
 ;; to org-caldav-inbox)
 
-;; TODO: Delete org-caldav-import-ics-buffer-to-org? Doesn't seem used
-;; anywhere. Here's the PR where it was added, not much info unfortunately:
+;; Not sure how the below functions are used. Maybe they're supposed
+;; to import ics events from email? Here's the PR where it was added,
+;; not much info unfortunately:
 ;; https://github.com/dengste/org-caldav/pull/101
 
 ;;;###autoload
