@@ -230,6 +230,10 @@ which can be fed into `org-caldav-insert-org-event-or-todo'."
 ;; org file, or adds to an arbitrary file (rather than adding contents
 ;; to org-caldav-inbox)
 
+;; TODO: Delete org-caldav-import-ics-buffer-to-org? Doesn't seem used
+;; anywhere. Here's the PR where it was added, not much info unfortunately:
+;; https://github.com/dengste/org-caldav/pull/101
+
 ;;;###autoload
 (defun org-caldav-import-ics-buffer-to-org ()
   "Add ics content in current buffer to `org-caldav-inbox'."
