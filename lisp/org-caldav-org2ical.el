@@ -30,6 +30,13 @@
 
 (require 'ox-icalendar)
 (require 'org-caldav-utils)
+(require 'org-caldav-ical2org)
+
+(defcustom org-caldav-files '("~/org/appointments.org")
+  "List of files which should end up in calendar.
+The file in `org-caldav-inbox' is implicitly included, so you
+don't have to add it here."
+  :type '(repeat string))
 
 (defcustom org-caldav-select-tags nil
   "List of tags to filter the synced tasks.

@@ -81,30 +81,6 @@ authentication with access URIs set in
 This is usually .ics, but on some servers (davmail), it is .EML"
   :type 'string)
 
-(defcustom org-caldav-files '("~/org/appointments.org")
-  "List of files which should end up in calendar.
-The file in `org-caldav-inbox' is implicitly included, so you
-don't have to add it here."
-  :type '(repeat string))
-
-(defcustom org-caldav-inbox "~/org/appointments.org"
-  "Where to put new entries obtained from calendar.
-
-This can be simply be a filename to an Org file where all new
-entries will be put.  It can also be a list, in which case you
-can choose between the following options (which are a subset of
-the allowed targets in `org-capture-templates'):
-
- - (file \"path/to/file\"), or
- - (id \"id of existing org entry\"), or
- - (file+headline \"path/to/file\" \"node headline\"), or
- - (file+olp \"path/to/file\" \"Level 1 headline\" \"Level 2\" ...), or
- - (file+olp+datetree \"path/to/file\" \"Level 1 heading\" ...)
-
-For datetree, use `org-caldav-datetree-treetype' to control the
-tree-type; see its Help for more info about the datetree behavior."
-  :type 'file)
-
 (defcustom org-caldav-datetree-treetype 'month
   "Tree-type when `org-caldav-inbox' is a datetree.
 

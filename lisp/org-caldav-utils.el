@@ -25,22 +25,6 @@
 
 ;;; Code:
 
-(defcustom org-caldav-todo-priority '((0 nil) (1 "A") (5 "B") (9 "C"))
-  "Mapping between iCalendar and Org TODO priority levels.
-
-The iCalendar priority is an integer 1-9, with lower number
-having higher priority, and 0 equal to unspecified priority. The
-default Org priorities are A-C, but this can be changed with
-`org-priority-highest' and `org-priority-lowest'. If you change
-the default Org priority, you should also update this
-variable (`org-caldav-todo-priority').
-
-The default mapping is: 0 is no priority, 1-4 is #A, 5-8 is #B,
-and 9 is #C.
-
-TODO: Store the priority in a property and sync it."
-  :type 'list)
-
 (defmacro org-caldav--suppress-obsolete-warning (var body)
   "Macro for compatibility.
 To be removed when emacs dependency reaches >=27.1."

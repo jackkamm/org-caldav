@@ -30,7 +30,41 @@
 
 ;;; Code:
 
-(require 'org-caldav-utils)
+;;(require 'org-caldav-utils)
+
+(defcustom org-caldav-inbox "~/org/appointments.org"
+  "Where to put new entries obtained from calendar.
+
+This can be simply be a filename to an Org file where all new
+entries will be put.  It can also be a list, in which case you
+can choose between the following options (which are a subset of
+the allowed targets in `org-capture-templates'):
+
+ - (file \"path/to/file\"), or
+ - (id \"id of existing org entry\"), or
+ - (file+headline \"path/to/file\" \"node headline\"), or
+ - (file+olp \"path/to/file\" \"Level 1 headline\" \"Level 2\" ...), or
+ - (file+olp+datetree \"path/to/file\" \"Level 1 heading\" ...)
+
+For datetree, use `org-caldav-datetree-treetype' to control the
+tree-type; see its Help for more info about the datetree behavior."
+  :type 'file)
+
+(defcustom org-caldav-todo-priority '((0 nil) (1 "A") (5 "B") (9 "C"))
+  "Mapping between iCalendar and Org TODO priority levels.
+
+The iCalendar priority is an integer 1-9, with lower number
+having higher priority, and 0 equal to unspecified priority. The
+default Org priorities are A-C, but this can be changed with
+`org-priority-highest' and `org-priority-lowest'. If you change
+the default Org priority, you should also update this
+variable (`org-caldav-todo-priority').
+
+The default mapping is: 0 is no priority, 1-4 is #A, 5-8 is #B,
+and 9 is #C.
+
+TODO: Store the priority in a property and sync it."
+  :type 'list)
 
 (defun org-caldav-insert-org-event-or-todo (eventdata-alist)
   "Insert org block from given event data at current position.
